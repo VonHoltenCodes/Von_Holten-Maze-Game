@@ -84,6 +84,7 @@ typedef struct {
     int cells[MAP_HEIGHT][MAP_WIDTH];
     int width;
     int height;
+    int level;  /* Current level number (1-3) */
 } Maze;
 
 /* Player structure */
@@ -109,11 +110,12 @@ typedef struct {
 /* Function prototypes */
 
 /* Maze functions */
-void initMaze(Maze *maze);
+void initMaze(Maze *maze, int level);
 int getMazeCell(Maze *maze, int x, int y);
 void setMazeCell(Maze *maze, int x, int y, int value);
 int isWall(int cellValue);
 int isReferencePoint(int cellValue);
+void loadLevel(Maze *maze, int level);
 
 /* Reference point functions */
 void initReferencePoints(void);
@@ -130,6 +132,12 @@ void renderFrame(Player *player, Maze *maze);
 void drawVerticalLine(int x, int drawStart, int drawEnd, unsigned char color);
 unsigned char getWallColor(int cellType, double distance);
 
+/* Double buffering functions */
+void initDoubleBuffer(void);
+void freeDoubleBuffer(void);
+void waitForVRetrace(void);
+void displayFrame(void);
+
 /* VGA functions (from BONK DOS) */
 void setVideoMode(int mode);
 void setPixel(int x, int y, unsigned char color);
@@ -141,5 +149,12 @@ void handleInput(Player *player, Maze *maze, int *running);
 /* Utility functions */
 double degreesToRadians(double degrees);
 void delay_ms(int ms);
+void showSplashScreen(void);
+
+/* Sound functions (from sound.c) */
+int initAudio(void);
+void playToneBlocking(int frequency, int durationMs);
+void shutdownAudio(void);
+int isAudioAvailable(void);
 
 #endif /* MAZE_H */
