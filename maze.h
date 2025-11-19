@@ -51,6 +51,17 @@
 #define RAY_STEP       0.02   /* Step size for ray marching */
 #define MAX_DEPTH      20.0   /* Maximum ray distance */
 
+/* NEW: Sprite system */
+#define MAX_SPRITES    32
+#define SPRITE_SIZE    16
+
+typedef struct {
+    double x, y;
+    int type;
+    int active;
+    unsigned char pixels[SPRITE_SIZE * SPRITE_SIZE];
+} Sprite;
+
 /* VGA color palette (Mode 13h) - CYBERPUNK NEON THEME */
 #define COLOR_BLACK      0
 #define COLOR_BLUE       1
