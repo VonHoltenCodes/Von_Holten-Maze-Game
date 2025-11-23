@@ -30,10 +30,16 @@
 #include <time.h>
 #include <string.h>
 #include "maze.h"
-#include "src/enemy_soldier_better.h"
-#include "src/enemy_zombie_better.h"
-#include "src/weapon_pistol_better.h"
-/* Kenney texture headers removed - using procedural textures */
+/* Minion Game Sprites - from vonholtencodes-site */
+/* Combined enemy roster - original minions + new enemies for variety */
+#include "src/enemy_gremlin.h"
+#include "src/minion_jump.h"
+#include "src/enemy_creeper.h"
+#include "src/enemy_tomato.h"
+#include "src/enemy_spiderman.h"
+#include "src/enemy_waldo.h"
+#include "src/enemy_snowman.h"
+#include "src/weapon_pistol_better.h"  /* Old Kenney weapon - better colors */
 
 #ifdef __DJGPP__
 #include <sys/nearptr.h>
@@ -84,11 +90,16 @@ static int lastShotHit = 0;  /* 1 if last shot hit something, 0 if missed */
 #define ZOMBIE_SPRITE_HEIGHT 32
 #define MAX_TEST_SPRITES 30  /* Increased for more enemies + pickups */
 
-/* Sprite type definitions */
-#define SPRITE_ENEMY_SOLDIER 0
-#define SPRITE_ENEMY_ZOMBIE 1
-#define SPRITE_PICKUP_HEALTH 2
-#define SPRITE_PICKUP_AMMO 3
+/* Sprite type definitions - combined minions + new enemies */
+#define SPRITE_ENEMY_GREMLIN 0
+#define SPRITE_ENEMY_MINION 1
+#define SPRITE_ENEMY_CREEPER 2
+#define SPRITE_ENEMY_TOMATO 3
+#define SPRITE_ENEMY_SPIDERMAN 4
+#define SPRITE_ENEMY_WALDO 5
+#define SPRITE_ENEMY_SNOWMAN 6
+#define SPRITE_PICKUP_HEALTH 7
+#define SPRITE_PICKUP_AMMO 8
 
 typedef struct {
     double x, y;
@@ -351,91 +362,150 @@ unsigned char getWallTexel(int wallType, int texX, int texY, int level) {
     texX = texX & (TEX_SIZE - 1);
     texY = texY & (TEX_SIZE - 1);
 
-    /* HOLOGRAM walls: Transparent walk-through panels with zig-zag pattern */
+    /* HOLOGRAM walls: Transparent walk-through panels with ANIMATED zig-zag pattern */
     if (wallType == CELL_WALL_HOLOGRAM) {
-        unsigned char brightColor, darkColor;
+        unsigned char brightColor, darkColor, veryBrightColor;
 
-        /* Level-based colors - RED for winning wall on higher levels */
+        /* Get time for flashing effect */
+        clock_t now = clock();
+        long elapsed = (now - gameStartTime) * 1000 / CLOCKS_PER_SEC;
+        int flashPhase = (elapsed / 250) % 2;  /* Flash every 250ms */
+
+        /* Level-based colors - BRIGHT RED for winning wall on level 2 */
         if (level == 1) {
-            brightColor = COLOR_LMAGENTA;  /* Light magenta zig-zags */
-            darkColor = COLOR_MAGENTA;     /* Magenta base */
+            veryBrightColor = COLOR_WHITE;      /* White flashes */
+            brightColor = COLOR_LMAGENTA;       /* Light magenta zig-zags */
+            darkColor = COLOR_MAGENTA;          /* Magenta base */
         } else if (level == 2) {
-            brightColor = COLOR_LMAGENTA;  /* Light magenta zig-zags */
-            darkColor = COLOR_RED;         /* RED winning wall! */
+            /* EXIT WALLS - FLASH between yellow and red for maximum visibility! */
+            if (flashPhase) {
+                veryBrightColor = COLOR_BWHITE;  /* Bright white - SUPER VISIBLE */
+                brightColor = COLOR_YELLOW;      /* Yellow - EXIT INDICATOR */
+                darkColor = COLOR_LRED;          /* Light red base */
+            } else {
+                veryBrightColor = COLOR_YELLOW;  /* Yellow flashes */
+                brightColor = COLOR_RED;         /* BRIGHT RED zig-zags */
+                darkColor = COLOR_RED;           /* Red base - FLASHING! */
+            }
         } else {
-            brightColor = COLOR_LMAGENTA;  /* Light magenta zig-zags */
-            darkColor = COLOR_BLACK;       /* Black base */
+            veryBrightColor = COLOR_GRAY;       /* Gray flashes */
+            brightColor = COLOR_LMAGENTA;       /* Light magenta zig-zags */
+            darkColor = COLOR_BLUE;             /* Blue base */
         }
 
-        /* ZIG-ZAG PATTERN for walk-through appearance */
+        /* ANIMATED GRID PATTERN - creates pulsing effect */
+        int gridSize = 8;
+        int isGridLine = (texX % gridSize == 0) || (texY % gridSize == 0);
+        int isCorner = (texX % gridSize == 0) && (texY % gridSize == 0);
+
+        /* Corners are very bright */
+        if (isCorner) {
+            return veryBrightColor;
+        }
+
+        /* Grid lines are bright */
+        if (isGridLine) {
+            return brightColor;
+        }
+
+        /* ZIG-ZAG PATTERN in between grid lines */
         if ((texX ^ texY) & 2) {
             return brightColor;
         }
         return darkColor;
     }
 
-    /* Create FINE-GRAINED rock texture with detailed scatter pattern */
-    int noise1 = (texX * 7 + texY * 13 + texX * texY * 3) % 16;
-    int noise2 = (texX * 11 + texY * 17) % 8;
-    int noise3 = ((texX + 3) * (texY + 5)) % 4;
-    int combinedNoise = (noise1 + noise2 + noise3) % 12;
+    /* DETAILED STONE BLOCK TEXTURE with mortar lines and texture */
+    #define BLOCK_SIZE 16
+    #define MORTAR_WIDTH 2
 
-    unsigned char baseColor, lightColor, darkColor, midColor;
+    /* Calculate block position */
+    int blockX = texX / BLOCK_SIZE;
+    int blockY = texY / BLOCK_SIZE;
+    int localX = texX % BLOCK_SIZE;
+    int localY = texY % BLOCK_SIZE;
 
-    /* DARKER stone colors with more variation */
-    switch (wallType) {
-        case CELL_WALL_NEON_GRID: /* Dark grey stone */
-            baseColor = COLOR_BLACK;
-            midColor = COLOR_GRAY;
-            lightColor = COLOR_GRAY;
-            darkColor = COLOR_BLACK;
-            break;
-
-        case CELL_WALL_CIRCUIT: /* Dark brownstone */
-            baseColor = COLOR_BLACK;
-            midColor = COLOR_BROWN;
-            lightColor = COLOR_BROWN;
-            darkColor = COLOR_BLACK;
-            break;
-
-        case CELL_WALL_DATA: /* Mixed dark grey/brown with scatter */
-            baseColor = COLOR_BLACK;
-            midColor = ((texX + texY) % 3 == 0) ? COLOR_GRAY : COLOR_BROWN;
-            lightColor = midColor;
-            darkColor = COLOR_BLACK;
-            break;
-
-        default: /* Standard dark grey stone */
-            baseColor = COLOR_BLACK;
-            midColor = COLOR_GRAY;
-            lightColor = COLOR_GRAY;
-            darkColor = COLOR_BLACK;
-            break;
+    /* Mortar lines between stone blocks - dark gray */
+    if (localX < MORTAR_WIDTH || localY < MORTAR_WIDTH) {
+        return COLOR_BLACK;
     }
 
-    /* Apply fine-grained texture with lots of color scatter */
-    if (combinedNoise < 2) {
-        return darkColor;  /* Deep shadows (16% of pixels) */
-    } else if (combinedNoise < 4) {
-        return baseColor;  /* Very dark spots (16% of pixels) */
-    } else if (combinedNoise < 9) {
-        return midColor;   /* Mid-tone stone (42% of pixels) */
-    } else if (combinedNoise < 11) {
-        return lightColor; /* Light spots (16% of pixels) */
+    /* Stone block interior with detailed texture */
+    int noise1 = (texX * 7 + texY * 13 + blockX * 17 + blockY * 23) % 16;
+    int noise2 = (texX * 11 + texY * 19) % 8;
+    int noise3 = ((texX + blockX * 5) * (texY + blockY * 3)) % 6;
+    int combinedNoise = (noise1 + noise2 + noise3) % 16;
+
+    /* Cracks and weathering pattern */
+    int cracksPattern = ((texX * 13 + texY * 7) ^ (blockX * 5 + blockY * 7)) % 32;
+    int weathering = ((localX + localY + blockX + blockY) * 7) % 8;
+
+    unsigned char baseColor, lightColor, darkColor, midColor, accentColor;
+
+    /* Stone block colors with variation per block */
+    int blockVariation = (blockX * 7 + blockY * 13) % 10;
+
+    if (blockVariation < 3) {
+        /* Dark gray stone */
+        baseColor = COLOR_GRAY;
+        midColor = COLOR_GRAY;
+        lightColor = COLOR_WHITE;
+        darkColor = COLOR_BLACK;
+        accentColor = COLOR_BROWN;
+    } else if (blockVariation < 6) {
+        /* Brownstone */
+        baseColor = COLOR_BROWN;
+        midColor = COLOR_BROWN;
+        lightColor = COLOR_GRAY;
+        darkColor = COLOR_BLACK;
+        accentColor = COLOR_RED;
     } else {
-        return midColor;   /* More mid-tone (remaining pixels) */
+        /* Mixed gray-brown */
+        baseColor = COLOR_GRAY;
+        midColor = COLOR_BROWN;
+        lightColor = COLOR_WHITE;
+        darkColor = COLOR_BLACK;
+        accentColor = COLOR_GRAY;
+    }
+
+    /* Cracks in stone */
+    if (cracksPattern < 2) {
+        return COLOR_BLACK;
+    }
+
+    /* 3D bevel effect on edges */
+    if (localX == MORTAR_WIDTH || localY == MORTAR_WIDTH) {
+        return lightColor;  /* Bright edge - top/left highlight */
+    }
+    if (localX == BLOCK_SIZE - 1 || localY == BLOCK_SIZE - 1) {
+        return darkColor;  /* Dark edge - bottom/right shadow */
+    }
+
+    /* Apply detailed texture with weathering */
+    if (combinedNoise < 2) {
+        return darkColor;  /* Deep shadows in crevices */
+    } else if (combinedNoise < 4 && weathering < 3) {
+        return accentColor;  /* Accent color streaks */
+    } else if (combinedNoise < 6) {
+        return baseColor;  /* Base stone color */
+    } else if (combinedNoise < 12) {
+        return midColor;   /* Mid-tone variations */
+    } else if (combinedNoise < 14) {
+        return lightColor; /* Light spots and highlights */
+    } else {
+        return midColor;   /* More mid-tone fill */
     }
 }
 
-/* Get floor texture - proper brick pattern with offset rows */
+/* Get floor texture - procedural brick pattern (restored) */
 unsigned char getFloorTexel(int texX, int texY, int level) {
     /* Wrap coordinates */
     texX = texX & (TEX_SIZE - 1);
     texY = texY & (TEX_SIZE - 1);
 
-    /* TINY bricks - much finer grid to differentiate from walls */
-    #define BRICK_WIDTH 3
-    #define BRICK_HEIGHT 2
+    /* REALISTIC bricks - 8x4 pixels for better brick appearance */
+    #define BRICK_WIDTH 8
+    #define BRICK_HEIGHT 4
     #define GROUT_SIZE 1
 
     /* Calculate which brick row we're in */
@@ -451,44 +521,52 @@ unsigned char getFloorTexel(int texX, int texY, int level) {
     int localX = offsetX % BRICK_WIDTH;
     int localY = texY % BRICK_HEIGHT;
 
-    /* Grout lines between bricks - black grout */
-    if (localX < GROUT_SIZE || localY < GROUT_SIZE) {
+    /* Grout lines between bricks - dark grey grout */
+    if (localX == 0 || localY == 0) {
         return COLOR_BLACK;
     }
 
-    /* Determine brick color - RED, BLACK, GREY variety */
+    /* Determine brick color - realistic red/brown brick mix */
     int brickX = offsetX / BRICK_WIDTH;
     int brickY = texY / BRICK_HEIGHT;
     int brickHash = (brickX * 7 + brickY * 13) % 10;
 
     unsigned char brickColor;
     if (level == 1) {
-        /* Level 1: Red, black, grey mix */
-        if (brickHash < 4) {
-            brickColor = COLOR_RED;      /* 40% red bricks */
-        } else if (brickHash < 7) {
-            brickColor = COLOR_GRAY;     /* 30% grey bricks */
+        /* Level 1: Red brick mix with brown accents */
+        if (brickHash < 6) {
+            brickColor = COLOR_RED;      /* 60% red bricks */
+        } else if (brickHash < 9) {
+            brickColor = COLOR_BROWN;    /* 30% brown bricks */
         } else {
-            brickColor = COLOR_BLACK;    /* 30% black bricks */
+            brickColor = COLOR_LRED;     /* 10% light red bricks */
         }
     } else if (level == 2) {
-        /* Level 2: Grey, brown, black mix */
+        /* Level 2: Grey stone brick mix */
         if (brickHash < 5) {
             brickColor = COLOR_GRAY;     /* 50% grey */
         } else if (brickHash < 8) {
             brickColor = COLOR_BROWN;    /* 30% brown */
         } else {
-            brickColor = COLOR_BLACK;    /* 20% black */
+            brickColor = COLOR_WHITE;    /* 20% white/light grey */
         }
     } else {
-        /* Level 3: Dark mix */
+        /* Level 3: Dark stone mix */
         if (brickHash < 5) {
-            brickColor = COLOR_BLUE;     /* 50% blue */
+            brickColor = COLOR_GRAY;     /* 50% grey */
         } else if (brickHash < 8) {
             brickColor = COLOR_BLACK;    /* 30% black */
         } else {
-            brickColor = COLOR_GRAY;     /* 20% grey */
+            brickColor = COLOR_BLUE;     /* 20% blue-grey */
         }
+    }
+
+    /* Add slight darkening to edges for 3D effect */
+    if (localX == 1 || localY == 1 || localX == BRICK_WIDTH - 1 || localY == BRICK_HEIGHT - 1) {
+        /* Darken edge pixels slightly for depth */
+        if (brickColor == COLOR_RED) return COLOR_BROWN;
+        if (brickColor == COLOR_BROWN) return COLOR_BLACK;
+        if (brickColor == COLOR_GRAY) return COLOR_BLACK;
     }
 
     return brickColor;
@@ -665,7 +743,7 @@ void renderFrame(Player *player, Maze *maze) {
     int x, y;
     int level = maze->level;
 
-    /* Draw ceiling - level-specific colors */
+    /* Draw ceiling - level-specific colors with starry sky */
     unsigned char ceilingColor;
     if (level == 1) {
         ceilingColor = COLOR_BLUE;      /* Level 1: Standard deep blue */
@@ -678,11 +756,30 @@ void renderFrame(Player *player, Maze *maze) {
     /* Shift horizon with pitch for cohesive vertical look (Doom-style) */
     int horizon = SCREEN_CENTER + playerPitch;
 
-    /* Draw ceiling */
+    /* Draw ceiling with procedural starry sky */
     int ceilEnd = (horizon < SCREEN_HEIGHT) ? horizon : SCREEN_HEIGHT;
     for (y = 0; y < ceilEnd; y++) {
         for (x = 0; x < SCREEN_WIDTH; x++) {
-            backBuffer[y * SCREEN_WIDTH + x] = ceilingColor;
+            /* Generate procedural stars using hash function */
+            /* Stars are static - based only on screen position, not player rotation */
+            int starHash = (x * 7919 + y * 4561) % 997;
+
+            unsigned char pixelColor = ceilingColor;
+
+            /* Star density: ~1.5% of pixels (15 in 1000) */
+            if (starHash < 15) {
+                /* Vary star brightness for depth effect */
+                int brightness = starHash % 3;
+                if (brightness == 0) {
+                    pixelColor = COLOR_WHITE;    /* Bright stars */
+                } else if (brightness == 1) {
+                    pixelColor = COLOR_WHITE;    /* Medium-bright stars */
+                } else {
+                    pixelColor = COLOR_GRAY;     /* Dimmer stars */
+                }
+            }
+
+            backBuffer[y * SCREEN_WIDTH + x] = pixelColor;
         }
     }
 
@@ -965,17 +1062,47 @@ void renderSprites(Player *player) {
         unsigned char *spriteData;
 
         switch (testSprites[i].spriteType) {
-            case SPRITE_ENEMY_SOLDIER:
-                /* Soldier - better sprite from Kenney pack */
-                spriteTexWidth = ENEMY_SOLDIER_BETTER_WIDTH;
-                spriteTexHeight = ENEMY_SOLDIER_BETTER_HEIGHT;
-                spriteData = (unsigned char *)enemy_soldier_better;
+            case SPRITE_ENEMY_GREMLIN:
+                /* Purple gremlin - original minion game */
+                spriteTexWidth = ENEMY_GREMLIN_WIDTH;
+                spriteTexHeight = ENEMY_GREMLIN_HEIGHT;
+                spriteData = (unsigned char *)enemy_gremlin;
                 break;
-            case SPRITE_ENEMY_ZOMBIE:
-                /* Zombie - better sprite from Kenney pack */
-                spriteTexWidth = ENEMY_ZOMBIE_BETTER_WIDTH;
-                spriteTexHeight = ENEMY_ZOMBIE_BETTER_HEIGHT;
-                spriteData = (unsigned char *)enemy_zombie_better;
+            case SPRITE_ENEMY_MINION:
+                /* Jumping minion - original minion game */
+                spriteTexWidth = MINION_JUMP_WIDTH;
+                spriteTexHeight = MINION_JUMP_HEIGHT;
+                spriteData = (unsigned char *)minion_jump;
+                break;
+            case SPRITE_ENEMY_CREEPER:
+                /* Green creeper enemy */
+                spriteTexWidth = ENEMY_CREEPER_WIDTH;
+                spriteTexHeight = ENEMY_CREEPER_HEIGHT;
+                spriteData = (unsigned char *)enemy_creeper;
+                break;
+            case SPRITE_ENEMY_TOMATO:
+                /* Orange tomato enemy */
+                spriteTexWidth = ENEMY_TOMATO_WIDTH;
+                spriteTexHeight = ENEMY_TOMATO_HEIGHT;
+                spriteData = (unsigned char *)enemy_tomato;
+                break;
+            case SPRITE_ENEMY_SPIDERMAN:
+                /* Red spiderman enemy */
+                spriteTexWidth = ENEMY_SPIDERMAN_WIDTH;
+                spriteTexHeight = ENEMY_SPIDERMAN_HEIGHT;
+                spriteData = (unsigned char *)enemy_spiderman;
+                break;
+            case SPRITE_ENEMY_WALDO:
+                /* Waldo enemy */
+                spriteTexWidth = ENEMY_WALDO_WIDTH;
+                spriteTexHeight = ENEMY_WALDO_HEIGHT;
+                spriteData = (unsigned char *)enemy_waldo;
+                break;
+            case SPRITE_ENEMY_SNOWMAN:
+                /* Snowman enemy */
+                spriteTexWidth = ENEMY_SNOWMAN_WIDTH;
+                spriteTexHeight = ENEMY_SNOWMAN_HEIGHT;
+                spriteData = (unsigned char *)enemy_snowman;
                 break;
             case SPRITE_PICKUP_HEALTH:
                 /* Health pickup - green cross */
@@ -990,10 +1117,10 @@ void renderSprites(Player *player) {
                 spriteData = (unsigned char *)ammoSprite;
                 break;
             default:
-                /* Default to soldier if unknown type */
-                spriteTexWidth = ENEMY_SOLDIER_BETTER_WIDTH;
-                spriteTexHeight = ENEMY_SOLDIER_BETTER_HEIGHT;
-                spriteData = (unsigned char *)enemy_soldier_better;
+                /* Default to gremlin if unknown type */
+                spriteTexWidth = ENEMY_GREMLIN_WIDTH;
+                spriteTexHeight = ENEMY_GREMLIN_HEIGHT;
+                spriteData = (unsigned char *)enemy_gremlin;
                 break;
         }
 
@@ -1039,7 +1166,7 @@ void renderSprites(Player *player) {
 
                 /* Render sprite column */
                 for (y = drawStartY; y < drawEndY; y++) {
-                    /* Calculate texture Y coordinate */
+                    /* Calculate texture Y coordinate - normal orientation */
                     int texY = (int)((y - drawStartY) * spriteTexHeight / (drawEndY - drawStartY));
                     if (texY < 0 || texY >= spriteTexHeight) continue;
 
@@ -1477,31 +1604,46 @@ void drawText(int x, int y, const char *text, unsigned char color) {
  * GAME HUD (Health, Ammo, Score)
  *===========================================================================*/
 
-void drawGameHUD(void) {
+void drawGameHUD(int currentLevel) {
     char buffer[32];
     int i;
+    int hudX = 5;  /* Bottom left corner */
+    int hudY = SCREEN_HEIGHT - 50;  /* Start 50 pixels from bottom */
 
-    /* Health bar at top left */
-    /* Draw "HEALTH" label */
-    drawText(5, 5, "HP:", 12);  /* Red text */
+    /* REORGANIZED STACK - BOTTOM LEFT (health at bottom) */
+
+    /* Ammo counter - first line */
+    sprintf(buffer, "AMMO: %d", playerAmmo);
+    drawText(hudX, hudY, buffer, 14);  /* Yellow */
+
+    /* Score - second line */
+    sprintf(buffer, "SCORE: %d", playerScore);
+    drawText(hudX, hudY + 10, buffer, 11);  /* Cyan */
+
+    /* Shots accuracy - third line */
+    sprintf(buffer, "HITS: %d/%d", shotsHit, shotsFired);
+    drawText(hudX, hudY + 20, buffer, 8);  /* Gray */
+
+    /* Health bar with label - fourth line (bottom of stack) */
+    drawText(hudX, hudY + 30, "HP:", 12);  /* Red text */
 
     /* Draw health bar background (black) */
     for (i = 0; i < 100; i++) {
-        int x = 30 + i;
+        int x = hudX + 25 + i;
         int y;
-        for (y = 5; y < 13; y++) {
+        for (y = hudY + 30; y < hudY + 38; y++) {
             if (x < SCREEN_WIDTH && y < SCREEN_HEIGHT) {
                 backBuffer[y * SCREEN_WIDTH + x] = 0;
             }
         }
     }
 
-    /* Draw health bar foreground (red/yellow based on health) */
+    /* Draw health bar foreground (color based on health) */
     for (i = 0; i < playerHealth && i < 100; i++) {
-        int x = 30 + i;
+        int x = hudX + 25 + i;
         int y;
-        unsigned char color = (playerHealth > 50) ? 12 : (playerHealth > 25 ? 14 : 4);  /* Green/Yellow/Red */
-        for (y = 6; y < 12; y++) {
+        unsigned char color = (playerHealth > 50) ? 10 : (playerHealth > 25 ? 14 : 4);  /* Green/Yellow/Red */
+        for (y = hudY + 31; y < hudY + 37; y++) {
             if (x < SCREEN_WIDTH && y < SCREEN_HEIGHT) {
                 backBuffer[y * SCREEN_WIDTH + x] = color;
             }
@@ -1510,22 +1652,12 @@ void drawGameHUD(void) {
 
     /* Draw health value */
     sprintf(buffer, "%d", playerHealth);
-    drawText(135, 5, buffer, 15);  /* White */
+    drawText(hudX + 130, hudY + 30, buffer, 15);  /* White */
 
-    /* Ammo counter at top right */
-    sprintf(buffer, "AMMO:%d", playerAmmo);
-    drawText(SCREEN_WIDTH - 80, 5, buffer, 14);  /* Yellow */
-
-    /* Score at bottom left - moved up to avoid weapon sprite */
-    sprintf(buffer, "SCORE:%d", playerScore);
-    drawText(5, SCREEN_HEIGHT - 35, buffer, 11);  /* Cyan */
-
-    /* Debug: Show shots fired/hit (bottom right) - moved to avoid center crosshair */
-    sprintf(buffer, "SHOTS:%d/%d", shotsHit, shotsFired);
-    drawText(SCREEN_WIDTH - 90, SCREEN_HEIGHT - 35, buffer, 14);  /* Yellow */
-
-    /* VERSION INDICATOR - top center */
-    drawText(SCREEN_WIDTH / 2 - 20, 5, "v2.2", 15);  /* White text */
+    /* TOP LEFT - Game name and level */
+    drawText(5, 5, "MAZE RUNNER", 11);  /* Cyan */
+    sprintf(buffer, "LEVEL %d", currentLevel);
+    drawText(5, 15, buffer, 14);  /* Yellow */
 
     /* CROSSHAIRS - center of screen */
     {
@@ -1580,6 +1712,111 @@ void drawGameHUD(void) {
     }
 }
 
+/* Draw mini-map in TOP-RIGHT corner */
+void drawMiniMap(Player *player, Maze *maze) {
+    #define MINIMAP_SIZE 60
+    #define MINIMAP_PADDING 5
+    #define MINIMAP_CELL_SIZE (MINIMAP_SIZE / MAP_WIDTH)
+
+    int startX = SCREEN_WIDTH - MINIMAP_SIZE - MINIMAP_PADDING;
+    int startY = MINIMAP_PADDING;
+    int x, y, px, py;
+
+    /* Draw semi-transparent black background */
+    for (y = 0; y < MINIMAP_SIZE + 4; y++) {
+        for (x = 0; x < MINIMAP_SIZE + 4; x++) {
+            int screenX = startX - 2 + x;
+            int screenY = startY - 2 + y;
+            if (screenX >= 0 && screenX < SCREEN_WIDTH && screenY >= 0 && screenY < SCREEN_HEIGHT) {
+                backBuffer[screenY * SCREEN_WIDTH + screenX] = COLOR_BLACK;
+            }
+        }
+    }
+
+    /* Draw border */
+    for (x = 0; x < MINIMAP_SIZE + 4; x++) {
+        int screenX = startX - 2 + x;
+        if (screenX >= 0 && screenX < SCREEN_WIDTH) {
+            backBuffer[(startY - 2) * SCREEN_WIDTH + screenX] = COLOR_YELLOW;
+            backBuffer[(startY + MINIMAP_SIZE + 1) * SCREEN_WIDTH + screenX] = COLOR_YELLOW;
+        }
+    }
+    for (y = 0; y < MINIMAP_SIZE + 4; y++) {
+        int screenY = startY - 2 + y;
+        if (screenY >= 0 && screenY < SCREEN_HEIGHT) {
+            backBuffer[screenY * SCREEN_WIDTH + (startX - 2)] = COLOR_YELLOW;
+            backBuffer[screenY * SCREEN_WIDTH + (startX + MINIMAP_SIZE + 1)] = COLOR_YELLOW;
+        }
+    }
+
+    /* Draw maze walls and exit */
+    for (y = 0; y < MAP_HEIGHT; y++) {
+        for (x = 0; x < MAP_WIDTH; x++) {
+            int cell = maze->cells[y][x];
+            int minimapX = startX + (x * MINIMAP_SIZE) / MAP_WIDTH;
+            int minimapY = startY + (y * MINIMAP_SIZE) / MAP_HEIGHT;
+            unsigned char color = COLOR_BLACK;
+
+            /* Determine cell color */
+            if (cell == REF_EXIT || cell == 20) {
+                /* Flash exit - red/yellow alternating */
+                clock_t now = clock();
+                long elapsed = (now - gameStartTime) * 1000 / CLOCKS_PER_SEC;
+                color = ((elapsed / 250) % 2) ? COLOR_RED : COLOR_YELLOW;
+            } else if (cell == CELL_WALL_HOLOGRAM || cell == 3) {
+                /* HOLOGRAM walls - magenta */
+                color = COLOR_MAGENTA;
+            } else if (cell > 0 && cell < 10) {
+                /* Regular walls - gray */
+                color = COLOR_GRAY;
+            }
+
+            /* Draw cell pixel */
+            if (color != COLOR_BLACK && minimapX >= 0 && minimapX < SCREEN_WIDTH && minimapY >= 0 && minimapY < SCREEN_HEIGHT) {
+                backBuffer[minimapY * SCREEN_WIDTH + minimapX] = color;
+            }
+        }
+    }
+
+    /* Draw player as bright green dot with direction indicator */
+    px = startX + ((int)(player->x * MINIMAP_SIZE)) / MAP_WIDTH;
+    py = startY + ((int)(player->y * MINIMAP_SIZE)) / MAP_HEIGHT;
+
+    /* Draw 2x2 player dot */
+    for (y = -1; y <= 1; y++) {
+        for (x = -1; x <= 1; x++) {
+            int screenX = px + x;
+            int screenY = py + y;
+            if (screenX >= startX && screenX < startX + MINIMAP_SIZE &&
+                screenY >= startY && screenY < startY + MINIMAP_SIZE) {
+                backBuffer[screenY * SCREEN_WIDTH + screenX] = COLOR_LGREEN;
+            }
+        }
+    }
+
+    /* Draw direction line from player */
+    for (int i = 1; i <= 3; i++) {
+        int dirX = px + (int)(player->dirX * i * 2);
+        int dirY = py + (int)(player->dirY * i * 2);
+        if (dirX >= startX && dirX < startX + MINIMAP_SIZE &&
+            dirY >= startY && dirY < startY + MINIMAP_SIZE) {
+            backBuffer[dirY * SCREEN_WIDTH + dirX] = COLOR_YELLOW;
+        }
+    }
+
+    /* Draw enemies on mini-map */
+    for (int i = 0; i < MAX_TEST_SPRITES; i++) {
+        if (testSprites[i].active && !testSprites[i].isPickup && testSprites[i].health > 0) {
+            int ex = startX + ((int)(testSprites[i].x * MINIMAP_SIZE)) / MAP_WIDTH;
+            int ey = startY + ((int)(testSprites[i].y * MINIMAP_SIZE)) / MAP_HEIGHT;
+            if (ex >= startX && ex < startX + MINIMAP_SIZE &&
+                ey >= startY && ey < startY + MINIMAP_SIZE) {
+                backBuffer[ey * SCREEN_WIDTH + ex] = COLOR_RED;
+            }
+        }
+    }
+}
+
 /* Draw large text (2x scale) */
 void drawBigText(int x, int y, const char *text, unsigned char color) {
     if (!text) return;
@@ -1612,58 +1849,154 @@ void drawBigText(int x, int y, const char *text, unsigned char color) {
     }
 }
 
-/* Show VGA splash screen at game start */
+/* Draw a single big character at position */
+void drawBigChar(int x, int y, char c, unsigned char color) {
+    if (c >= 128 || c < 0) return;
+
+    const unsigned char *glyph = font8x8[(unsigned char)c];
+
+    /* Draw 2x scaled character */
+    for (int row = 0; row < 8; row++) {
+        unsigned char rowData = glyph[row];
+        for (int col = 0; col < 8; col++) {
+            if (rowData & (0x80 >> col)) {
+                /* Draw 2x2 pixel block */
+                for (int dy = 0; dy < 2; dy++) {
+                    for (int dx = 0; dx < 2; dx++) {
+                        int px = x + col * 2 + dx;
+                        int py = y + row * 2 + dy;
+                        if (px >= 0 && px < SCREEN_WIDTH && py >= 0 && py < SCREEN_HEIGHT) {
+                            backBuffer[py * SCREEN_WIDTH + px] = color;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Show VGA splash screen at game start with ANIMATED TITLE */
 void showVGASplashScreen(void) {
+    const char *title = "MAZE RUNNER";
+    int titleLen = strlen(title);
+    int finalTitleX = (SCREEN_WIDTH - titleLen * 16) / 2;  /* Final centered position */
+    int titleY = 60;  /* Centered vertically for hero section */
+
+    /* Letter positions - each letter slides in from off-screen */
+    int letterX[32];  /* Current X position of each letter */
+    int letterTargetX[32];  /* Target X position */
+
+    /* Calculate target positions */
+    for (int i = 0; i < titleLen; i++) {
+        letterTargetX[i] = finalTitleX + i * 16;
+        letterX[i] = -16 - i * 5;  /* Start off-screen left, staggered */
+    }
+
+    /* Animation loop - slide letters in */
+    int animating = 1;
+    int frame = 0;
+    while (animating) {
+        clearScreen(COLOR_BLACK);
+        animating = 0;
+
+        /* Draw and update each letter */
+        for (int i = 0; i < titleLen; i++) {
+            /* Slide letter toward target */
+            if (letterX[i] < letterTargetX[i]) {
+                letterX[i] += 4;  /* Slide speed: 4 pixels per frame (slower) */
+                if (letterX[i] > letterTargetX[i]) {
+                    letterX[i] = letterTargetX[i];  /* Snap to final position */
+                }
+                animating = 1;  /* Still animating */
+            }
+
+            /* Draw letter at current position */
+            if (letterX[i] >= -16) {  /* Only draw if partially on screen */
+                drawBigChar(letterX[i], titleY, title[i], NEON_CYAN);
+            }
+        }
+
+        displayFrame();
+        delay(30);  /* ~33 fps animation */
+        frame++;
+    }
+
+    /* Hold on title for 5 seconds */
+    delay(5000);
+
+    /* Fade in credits using color progression */
+    const char *credit1 = "CREATED BY TRENT VON HOLTEN";
+    const char *credit2 = "VONHOLTENCODES";
+    const char *credit3 = "VERSION 2.20 - 2025";
+
+    int credit1X = (SCREEN_WIDTH - strlen(credit1) * 8) / 2;
+    int credit2X = (SCREEN_WIDTH - strlen(credit2) * 8) / 2;
+    int credit3X = (SCREEN_WIDTH - strlen(credit3) * 8) / 2;
+
+    /* Fade in by showing progressively brighter colors */
+    unsigned char fadeColors[] = {COLOR_BLACK, COLOR_GRAY, COLOR_WHITE, COLOR_WHITE};
+    unsigned char fadeColors2[] = {COLOR_BLACK, COLOR_GRAY, NEON_GREEN, NEON_GREEN};
+    unsigned char fadeColors3[] = {COLOR_BLACK, COLOR_GRAY, COLOR_YELLOW, COLOR_YELLOW};
+
+    for (int fadeStep = 0; fadeStep < 4; fadeStep++) {
+        clearScreen(COLOR_BLACK);
+
+        /* Redraw title */
+        drawBigText(finalTitleX, titleY, title, NEON_CYAN);
+
+        /* Draw credits with current fade color */
+        drawText(credit1X, 100, credit1, fadeColors[fadeStep]);
+        drawText(credit2X, 110, credit2, fadeColors2[fadeStep]);
+        drawText(credit3X, 120, credit3, fadeColors3[fadeStep]);
+
+        displayFrame();
+        delay(300);  /* Slower fade - 300ms per step */
+    }
+
+    /* Now show instructions */
+    delay(1000);  /* Hold credits longer before showing instructions */
     clearScreen(COLOR_BLACK);
 
-    /* Title - "MAZE RUNNER" - center it properly */
-    const char *title = "MAZE RUNNER";
-    int titleX = (SCREEN_WIDTH - strlen(title) * 16) / 2;
-    drawBigText(titleX, 20, title, NEON_CYAN);
+    /* Title at top */
+    drawBigText(finalTitleX, 20, title, NEON_CYAN);
 
-    /* Subtitle - use normal text (8x8) */
+    /* Subtitle */
     const char *subtitle = "CYBERPUNK GRID ESCAPE";
     int subX = (SCREEN_WIDTH - strlen(subtitle) * 8) / 2;
-    drawText(subX, 50, subtitle, NEON_MAGENTA);
+    drawText(subX, 45, subtitle, NEON_MAGENTA);
 
-    /* Credits */
-    int y = 70;
-    const char *credit1 = "CREATED BY TRENT VON HOLTEN";
-    int credit1X = (SCREEN_WIDTH - strlen(credit1) * 8) / 2;
-    drawText(credit1X, y, credit1, COLOR_WHITE);
-
-    y += 10;
-    const char *credit2 = "VONHOLTENCODES";
-    int credit2X = (SCREEN_WIDTH - strlen(credit2) * 8) / 2;
-    drawText(credit2X, y, credit2, NEON_GREEN);
-
-    y += 10;
-    const char *credit3 = "BUILT FOR 1995, IN 2025";
-    int credit3X = (SCREEN_WIDTH - strlen(credit3) * 8) / 2;
-    drawText(credit3X, y, credit3, COLOR_YELLOW);
-
-    /* Instructions - use normal text */
-    y = 110;
+    /* Instructions */
+    int y = 60;
     drawText(60, y, "CONTROLS:", NEON_GREEN);
     y += 14;
-    drawText(40, y, "UP ARROW - MOVE FORWARD", COLOR_WHITE);
+    drawText(30, y, "UP/DOWN ARROWS - MOVE", COLOR_WHITE);
     y += 10;
-    drawText(40, y, "DOWN ARROW - MOVE BACK", COLOR_WHITE);
+    drawText(30, y, "LEFT/RIGHT ARROWS - TURN", COLOR_WHITE);
     y += 10;
-    drawText(40, y, "LEFT/RIGHT - TURN", COLOR_WHITE);
+    drawText(30, y, "SPACE - SHOOT", COLOR_WHITE);
     y += 10;
-    drawText(40, y, "ESC - QUIT", COLOR_WHITE);
+    drawText(30, y, "ESC - QUIT GAME", COLOR_WHITE);
+    y += 16;
+    drawText(60, y, "GAMEPLAY:", NEON_GREEN);
+    y += 14;
+    drawText(25, y, "SHOOT ENEMIES FOR POINTS", COLOR_LMAGENTA);
+    y += 10;
+    drawText(25, y, "COLLECT AMMO & HEALTH PICKUPS", COLOR_LGREEN);
+    y += 10;
+    drawText(25, y, "FIND FLASHING EXIT ON MINIMAP", COLOR_YELLOW);
+    y += 10;
+    drawText(25, y, "SURVIVE 3 LEVELS TO WIN!", COLOR_LRED);
+
+    /* Credits at bottom */
+    drawText(credit1X, 172, credit1, COLOR_WHITE);
+    drawText(credit2X, 182, credit2, NEON_GREEN);
 
     /* Press key prompt */
-    y = 170;
     const char *prompt = "PRESS ANY KEY TO START";
     int promptX = (SCREEN_WIDTH - strlen(prompt) * 8) / 2;
-    drawText(promptX, y, prompt, COLOR_YELLOW);
+    drawText(promptX, 192, prompt, COLOR_YELLOW);
 
-    /* Display */
     displayFrame();
-
-    /* Wait for key */
     getch();
 }
 
@@ -1856,23 +2189,24 @@ void showCredits(void) {
     drawBigText(titleX, 10, title, NEON_CYAN);
 
     /* Credits - ALL UPPERCASE FOR VISIBILITY */
-    drawText(20, 50, "CREATED BY VONHOLTENCODES (2025)", COLOR_YELLOW);
-    drawText(20, 65, "OPEN SOURCE & FREEWARE USED:", COLOR_WHITE);
+    drawText(20, 45, "CREATED BY VONHOLTENCODES (2025)", COLOR_YELLOW);
+    drawText(20, 55, "VERSION 2.19", COLOR_LCYAN);
+    drawText(20, 70, "OPEN SOURCE & FREEWARE USED:", COLOR_WHITE);
 
-    drawText(20, 80, "- KENNEY.NL SPRITE ASSETS (CC0 1.0)", COLOR_GRAY);
-    drawText(25, 90, "  WEAPON & ENEMY SPRITES", COLOR_GRAY);
+    drawText(20, 85, "- MINION GAME SPRITES (VONHOLTENCODES)", COLOR_GRAY);
+    drawText(25, 95, "  CUSTOM ENEMY AND CHARACTER SPRITES", COLOR_GRAY);
 
-    drawText(20, 105, "- DJGPP CROSS-COMPILER (GPL)", COLOR_GRAY);
-    drawText(25, 115, "  DOS DEVELOPMENT TOOLCHAIN", COLOR_GRAY);
+    drawText(20, 110, "- KENNEY.NL WEAPON SPRITE (CC0 1.0)", COLOR_GRAY);
+    drawText(25, 120, "  PISTOL WEAPON SPRITE", COLOR_GRAY);
 
-    drawText(20, 130, "- DOS/4GW DOS EXTENDER (FREEWARE)", COLOR_GRAY);
-    drawText(25, 140, "  32-BIT DOS MEMORY SUPPORT", COLOR_GRAY);
+    drawText(20, 135, "- DJGPP CROSS-COMPILER (GPL)", COLOR_GRAY);
+    drawText(25, 145, "  DOS DEVELOPMENT TOOLCHAIN", COLOR_GRAY);
 
-    drawText(20, 155, "- SOUND BLASTER API (PUBLIC DOMAIN)", COLOR_GRAY);
-    drawText(25, 165, "  AUDIO PLAYBACK", COLOR_GRAY);
+    drawText(20, 160, "- DOS/4GW DOS EXTENDER (FREEWARE)", COLOR_GRAY);
+    drawText(25, 170, "  32-BIT DOS MEMORY SUPPORT", COLOR_GRAY);
 
-    drawText(20, 180, "BUILT WITH CLASSIC DOS RAYCASTING", COLOR_WHITE);
-    drawText(20, 190, "INSPIRED BY WOLFENSTEIN 3D AND DOOM", COLOR_WHITE);
+    drawText(20, 185, "BUILT WITH CLASSIC DOS RAYCASTING", COLOR_WHITE);
+    drawText(20, 195, "INSPIRED BY WOLFENSTEIN 3D AND DOOM", COLOR_WHITE);
 
     /* Skip prompt */
     const char *skip = "PRESS ESC TO EXIT";
@@ -1976,7 +2310,7 @@ int main(void) {
 
     /* Now show system verification messages */
     printf("\n");
-    printf("MAZE v1.0 - Cyberpunk Raycasting Engine\n");
+    printf("MAZE RUNNER v2.20 - DOS Raycasting Engine\n");
     printf("(c) 2025 Trent Von Holten - VonHoltenCodes\n");
     printf("\n");
     printf("Checking system requirements...\n");
@@ -2053,12 +2387,12 @@ int main(void) {
     lastFootstepTime = gameStartTime;
     gameWon = 0;
 
-    /* Initialize sprites - enemies and pickups */
-    /* Enemy 0: Soldier */
+    /* Initialize sprites - diverse enemy roster */
+    /* Enemy 0: Purple Gremlin */
     testSprites[0].x = testSprites[0].spawnX = 7.5;
     testSprites[0].y = testSprites[0].spawnY = 3.5;
     testSprites[0].active = 1;
-    testSprites[0].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[0].spriteType = SPRITE_ENEMY_GREMLIN;
     testSprites[0].health = 100;
     testSprites[0].isPickup = 0;
     testSprites[0].respawnTime = 0;
@@ -2067,43 +2401,43 @@ int main(void) {
     testSprites[1].x = testSprites[1].spawnX = 12.5;
     testSprites[1].y = testSprites[1].spawnY = 7.5;
     testSprites[1].active = 1;
-    testSprites[1].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[1].spriteType = SPRITE_ENEMY_MINION;
     testSprites[1].health = 100;
     testSprites[1].isPickup = 0;
     testSprites[1].respawnTime = 0;
 
-    /* Enemy 2: Soldier */
+    /* Enemy 2: Creeper */
     testSprites[2].x = testSprites[2].spawnX = 18.5;
     testSprites[2].y = testSprites[2].spawnY = 12.5;
     testSprites[2].active = 1;
-    testSprites[2].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[2].spriteType = SPRITE_ENEMY_CREEPER;
     testSprites[2].health = 100;
     testSprites[2].isPickup = 0;
     testSprites[2].respawnTime = 0;
 
-    /* Enemy 3: Zombie */
+    /* Enemy 3: Tomato */
     testSprites[3].x = testSprites[3].spawnX = 3.5;
     testSprites[3].y = testSprites[3].spawnY = 16.5;
     testSprites[3].active = 1;
-    testSprites[3].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[3].spriteType = SPRITE_ENEMY_TOMATO;
     testSprites[3].health = 100;
     testSprites[3].isPickup = 0;
     testSprites[3].respawnTime = 0;
 
-    /* Enemy 4: Soldier */
+    /* Enemy 4: Spiderman */
     testSprites[4].x = testSprites[4].spawnX = 15.5;
     testSprites[4].y = testSprites[4].spawnY = 18.5;
     testSprites[4].active = 1;
-    testSprites[4].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[4].spriteType = SPRITE_ENEMY_SPIDERMAN;
     testSprites[4].health = 100;
     testSprites[4].isPickup = 0;
     testSprites[4].respawnTime = 0;
 
-    /* Enemy 5: Zombie */
+    /* Enemy 5: Waldo */
     testSprites[5].x = testSprites[5].spawnX = 5.5;
     testSprites[5].y = testSprites[5].spawnY = 5.5;
     testSprites[5].active = 1;
-    testSprites[5].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[5].spriteType = SPRITE_ENEMY_WALDO;
     testSprites[5].health = 100;
     testSprites[5].isPickup = 0;
     testSprites[5].respawnTime = 0;
@@ -2112,7 +2446,7 @@ int main(void) {
     testSprites[6].x = testSprites[6].spawnX = 9.5;
     testSprites[6].y = testSprites[6].spawnY = 14.5;
     testSprites[6].active = 1;
-    testSprites[6].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[6].spriteType = SPRITE_ENEMY_GREMLIN;
     testSprites[6].health = 100;
     testSprites[6].isPickup = 0;
     testSprites[6].respawnTime = 0;
@@ -2121,43 +2455,43 @@ int main(void) {
     testSprites[7].x = testSprites[7].spawnX = 16.5;
     testSprites[7].y = testSprites[7].spawnY = 6.5;
     testSprites[7].active = 1;
-    testSprites[7].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[7].spriteType = SPRITE_ENEMY_MINION;
     testSprites[7].health = 100;
     testSprites[7].isPickup = 0;
     testSprites[7].respawnTime = 0;
 
-    /* Enemy 8: Soldier */
+    /* Enemy 8: Creeper */
     testSprites[8].x = testSprites[8].spawnX = 11.5;
     testSprites[8].y = testSprites[8].spawnY = 17.5;
     testSprites[8].active = 1;
-    testSprites[8].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[8].spriteType = SPRITE_ENEMY_CREEPER;
     testSprites[8].health = 100;
     testSprites[8].isPickup = 0;
     testSprites[8].respawnTime = 0;
 
-    /* Enemy 9: Zombie */
+    /* Enemy 9: Tomato */
     testSprites[9].x = testSprites[9].spawnX = 6.5;
     testSprites[9].y = testSprites[9].spawnY = 11.5;
     testSprites[9].active = 1;
-    testSprites[9].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[9].spriteType = SPRITE_ENEMY_TOMATO;
     testSprites[9].health = 100;
     testSprites[9].isPickup = 0;
     testSprites[9].respawnTime = 0;
 
-    /* Enemy 10: Soldier */
+    /* Enemy 10: Spiderman */
     testSprites[10].x = testSprites[10].spawnX = 13.5;
     testSprites[10].y = testSprites[10].spawnY = 4.5;
     testSprites[10].active = 1;
-    testSprites[10].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[10].spriteType = SPRITE_ENEMY_SPIDERMAN;
     testSprites[10].health = 100;
     testSprites[10].isPickup = 0;
     testSprites[10].respawnTime = 0;
 
-    /* Enemy 11: Zombie */
+    /* Enemy 11: Waldo */
     testSprites[11].x = testSprites[11].spawnX = 19.5;
     testSprites[11].y = testSprites[11].spawnY = 9.5;
     testSprites[11].active = 1;
-    testSprites[11].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[11].spriteType = SPRITE_ENEMY_WALDO;
     testSprites[11].health = 100;
     testSprites[11].isPickup = 0;
     testSprites[11].respawnTime = 0;
@@ -2166,7 +2500,7 @@ int main(void) {
     testSprites[12].x = testSprites[12].spawnX = 4.5;
     testSprites[12].y = testSprites[12].spawnY = 13.5;
     testSprites[12].active = 1;
-    testSprites[12].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[12].spriteType = SPRITE_ENEMY_GREMLIN;
     testSprites[12].health = 100;
     testSprites[12].isPickup = 0;
     testSprites[12].respawnTime = 0;
@@ -2175,16 +2509,16 @@ int main(void) {
     testSprites[13].x = testSprites[13].spawnX = 17.5;
     testSprites[13].y = testSprites[13].spawnY = 19.5;
     testSprites[13].active = 1;
-    testSprites[13].spriteType = SPRITE_ENEMY_ZOMBIE;
+    testSprites[13].spriteType = SPRITE_ENEMY_MINION;
     testSprites[13].health = 100;
     testSprites[13].isPickup = 0;
     testSprites[13].respawnTime = 0;
 
-    /* Enemy 14: Soldier */
+    /* Enemy 14: Snowman */
     testSprites[14].x = testSprites[14].spawnX = 8.5;
     testSprites[14].y = testSprites[14].spawnY = 8.5;
     testSprites[14].active = 1;
-    testSprites[14].spriteType = SPRITE_ENEMY_SOLDIER;
+    testSprites[14].spriteType = SPRITE_ENEMY_SNOWMAN;
     testSprites[14].health = 100;
     testSprites[14].isPickup = 0;
     testSprites[14].respawnTime = 0;
@@ -2375,8 +2709,11 @@ int main(void) {
                 }
             }
 
-            /* Draw HUD (health, ammo, score) */
-            drawGameHUD();
+            /* Draw HUD (health, ammo, score, level) */
+            drawGameHUD(currentLevel);
+
+            /* Draw mini-map */
+            drawMiniMap(&player, &maze);
 
             /* Display the completed frame during vertical retrace */
             displayFrame();
@@ -2513,7 +2850,7 @@ int main(void) {
     }
 
     printf("  VonHoltenCodes 2025\n");
-    printf("  Cyberpunk Maze Runner v1.0\n");
+    printf("  MAZE RUNNER v2.19\n");
     printf("========================================\n");
     printf("\n");
 
