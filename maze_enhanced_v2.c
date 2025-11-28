@@ -30,6 +30,7 @@
 #include <time.h>
 #include <string.h>
 #include "maze.h"
+#include "adlib.h"
 /* Minion Game Sprites - from vonholtencodes-site */
 /* Combined enemy roster - original minions + new enemies for variety */
 #include "src/enemy_gremlin.h"
@@ -62,7 +63,7 @@ static unsigned char *backBuffer = NULL;
 /* Game state variables */
 static clock_t gameStartTime = 0;
 static int gameWon = 0;
-static double levelTimes[3] = {0.0, 0.0, 0.0}; /* Track completion time for each level */
+static double levelTimes[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}; /* Track completion time for each level */
 
 /* Footstep sound state */
 static int footstepIndex = 0;
@@ -100,6 +101,381 @@ static int lastShotHit = 0;  /* 1 if last shot hit something, 0 if missed */
 #define SPRITE_ENEMY_SNOWMAN 6
 #define SPRITE_PICKUP_HEALTH 7
 #define SPRITE_PICKUP_AMMO 8
+#define SPRITE_TORCH 9  /* NEW: Animated torch for dynamic lighting */
+
+/*============================================================================
+ * DYNAMIC LIGHTING SYSTEM - v3.0 FEATURE
+ * Real-time torch lighting with animated flames and fire particles
+ *===========================================================================*/
+
+#define MAX_TORCHES 16
+#define MAX_FIRE_PARTICLES 64
+#define TORCH_LIGHT_RADIUS 5.0  /* How far torch light reaches */
+#define TORCH_FLICKER_SPEED 250 /* ms between flicker updates - slower for stability */
+
+/* Animated torch sprite - 16x24, 4 animation frames */
+#define TORCH_WIDTH 16
+#define TORCH_HEIGHT 24
+
+/* Torch animation frame 1 - Base flame */
+static unsigned char torchFrame1[TORCH_WIDTH * TORCH_HEIGHT] = {
+    0,0,0,0,0,0,0,14,14,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,14,14,14,14,0,0,0,0,0,0,
+    0,0,0,0,0,14,14,12,12,14,14,0,0,0,0,0,
+    0,0,0,0,0,14,12,4,4,12,14,0,0,0,0,0,
+    0,0,0,0,14,12,4,4,4,4,12,14,0,0,0,0,
+    0,0,0,0,14,4,4,15,15,4,4,14,0,0,0,0,
+    0,0,0,14,12,4,15,15,15,15,4,12,14,0,0,0,
+    0,0,0,14,4,4,15,15,15,15,4,4,14,0,0,0,
+    0,0,0,12,4,14,14,15,15,14,14,4,12,0,0,0,
+    0,0,0,0,12,14,0,14,14,0,14,12,0,0,0,0,
+    0,0,0,0,0,14,0,0,0,0,14,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,6,6,6,6,0,0,0,0,0,0,
+    0,0,0,0,0,6,6,8,8,6,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,6,6,6,8,8,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,0,6,6,6,6,6,6,0,0,0,0,0
+};
+
+/* Torch animation frame 2 - Flame swaying left */
+static unsigned char torchFrame2[TORCH_WIDTH * TORCH_HEIGHT] = {
+    0,0,0,0,0,0,14,14,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,14,14,14,14,0,0,0,0,0,0,0,
+    0,0,0,0,14,14,12,12,14,14,0,0,0,0,0,0,
+    0,0,0,0,14,12,4,4,12,14,0,0,0,0,0,0,
+    0,0,0,14,12,4,4,4,4,12,14,0,0,0,0,0,
+    0,0,0,14,4,4,15,15,4,4,14,0,0,0,0,0,
+    0,0,14,12,4,15,15,15,15,4,12,14,0,0,0,0,
+    0,0,14,4,4,15,15,15,15,4,4,14,0,0,0,0,
+    0,0,12,4,14,14,15,15,14,14,4,12,0,0,0,0,
+    0,0,0,12,14,0,14,14,0,14,12,0,0,0,0,0,
+    0,0,0,0,14,0,0,0,0,14,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,6,6,6,6,0,0,0,0,0,0,
+    0,0,0,0,0,6,6,8,8,6,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,6,6,6,8,8,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,0,6,6,6,6,6,6,0,0,0,0,0
+};
+
+/* Torch animation frame 3 - Flame tall */
+static unsigned char torchFrame3[TORCH_WIDTH * TORCH_HEIGHT] = {
+    0,0,0,0,0,0,0,14,14,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,14,12,12,14,0,0,0,0,0,0,
+    0,0,0,0,0,14,12,4,4,12,14,0,0,0,0,0,
+    0,0,0,0,0,14,4,4,4,4,14,0,0,0,0,0,
+    0,0,0,0,14,12,4,15,15,4,12,14,0,0,0,0,
+    0,0,0,0,14,4,15,15,15,15,4,14,0,0,0,0,
+    0,0,0,14,12,4,15,15,15,15,4,12,14,0,0,0,
+    0,0,0,14,4,4,15,15,15,15,4,4,14,0,0,0,
+    0,0,0,12,4,14,15,15,15,15,14,4,12,0,0,0,
+    0,0,0,0,12,14,14,15,15,14,14,12,0,0,0,0,
+    0,0,0,0,0,14,0,14,14,0,14,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,6,6,6,6,0,0,0,0,0,0,
+    0,0,0,0,0,6,6,8,8,6,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,6,6,6,8,8,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,0,6,6,6,6,6,6,0,0,0,0,0
+};
+
+/* Torch animation frame 4 - Flame swaying right */
+static unsigned char torchFrame4[TORCH_WIDTH * TORCH_HEIGHT] = {
+    0,0,0,0,0,0,0,0,14,14,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,14,14,14,14,0,0,0,0,0,
+    0,0,0,0,0,0,14,14,12,12,14,14,0,0,0,0,
+    0,0,0,0,0,0,14,12,4,4,12,14,0,0,0,0,
+    0,0,0,0,0,14,12,4,4,4,4,12,14,0,0,0,
+    0,0,0,0,0,14,4,4,15,15,4,4,14,0,0,0,
+    0,0,0,0,14,12,4,15,15,15,15,4,12,14,0,0,
+    0,0,0,0,14,4,4,15,15,15,15,4,4,14,0,0,
+    0,0,0,0,12,4,14,14,15,15,14,14,4,12,0,0,
+    0,0,0,0,0,12,14,0,14,14,0,14,12,0,0,0,
+    0,0,0,0,0,0,14,0,0,0,0,14,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,6,6,6,6,0,0,0,0,0,0,
+    0,0,0,0,0,6,6,8,8,6,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,0,6,8,8,8,8,6,0,0,0,0,0,
+    0,0,0,0,6,6,6,8,8,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,6,6,6,6,6,6,6,6,0,0,0,0,
+    0,0,0,0,0,6,6,6,6,6,6,0,0,0,0,0
+};
+
+/* Array of torch frame pointers for animation */
+static unsigned char *torchFrames[4] = {torchFrame1, torchFrame2, torchFrame3, torchFrame4};
+
+/* Torch position structure */
+typedef struct {
+    double x, y;       /* World position */
+    int active;        /* Is torch lit? */
+    int animFrame;     /* Current animation frame (0-3) */
+    double intensity;  /* Light intensity (0.5-1.5, flickers) */
+    clock_t lastFlicker;
+} Torch;
+
+static Torch torches[MAX_TORCHES];
+static int numTorches = 0;
+
+/* Fire particle structure for floating embers */
+typedef struct {
+    double x, y, z;    /* World position (z = height above ground) */
+    double vx, vy, vz; /* Velocity */
+    int life;          /* Remaining life in frames */
+    unsigned char color; /* Particle color */
+    int active;
+} FireParticle;
+
+static FireParticle fireParticles[MAX_FIRE_PARTICLES];
+static clock_t lastParticleSpawn = 0;
+
+/* Initialize torch system */
+void initTorches(void) {
+    int i;
+    numTorches = 0;
+
+    /* Clear all torches */
+    for (i = 0; i < MAX_TORCHES; i++) {
+        torches[i].active = 0;
+        torches[i].animFrame = 0;
+        torches[i].intensity = 1.0;
+        torches[i].lastFlicker = 0;
+    }
+
+    /* Clear all particles */
+    for (i = 0; i < MAX_FIRE_PARTICLES; i++) {
+        fireParticles[i].active = 0;
+    }
+}
+
+/* Add a torch at world position */
+void addTorch(double x, double y) {
+    if (numTorches >= MAX_TORCHES) return;
+
+    torches[numTorches].x = x;
+    torches[numTorches].y = y;
+    torches[numTorches].active = 1;
+    torches[numTorches].animFrame = numTorches % 4;  /* Stagger animation */
+    torches[numTorches].intensity = 1.0;
+    torches[numTorches].lastFlicker = clock();
+    numTorches++;
+}
+
+/* Setup torches for current level */
+/* Positions verified against maze layout - all in open floor cells (value 0) */
+void setupLevelTorches(int level) {
+    initTorches();
+
+    /* Place torches in confirmed open floor areas based on maze layout */
+    switch (level) {
+        case 1:
+            /* Level 1: Verified open positions from level1Layout */
+            addTorch(3.5, 1.5);   /* Row 1, near spawn - value 0 */
+            addTorch(8.5, 1.5);   /* Row 1, east corridor */
+            addTorch(3.5, 7.5);   /* Row 7, west side - long corridor */
+            addTorch(10.5, 7.5);  /* Row 7, middle of corridor */
+            addTorch(18.5, 7.5);  /* Row 7, east side */
+            addTorch(5.5, 11.5);  /* Row 11, open area */
+            addTorch(10.5, 21.5); /* Row 21, near exit */
+            break;
+        case 2:
+            addTorch(3.5, 1.5);
+            addTorch(10.5, 1.5);
+            addTorch(5.5, 7.5);
+            addTorch(15.5, 7.5);
+            addTorch(10.5, 15.5);
+            addTorch(10.5, 21.5);
+            break;
+        case 3:
+            addTorch(3.5, 1.5);
+            addTorch(10.5, 3.5);
+            addTorch(5.5, 7.5);
+            addTorch(15.5, 7.5);
+            addTorch(10.5, 11.5);
+            addTorch(5.5, 17.5);
+            addTorch(10.5, 21.5);
+            break;
+        case 4:
+            addTorch(3.5, 1.5);
+            addTorch(10.5, 3.5);
+            addTorch(5.5, 7.5);
+            addTorch(15.5, 11.5);
+            addTorch(10.5, 17.5);
+            addTorch(10.5, 21.5);
+            break;
+        case 5:
+            addTorch(5.5, 1.5);
+            addTorch(15.5, 3.5);
+            addTorch(5.5, 9.5);
+            addTorch(15.5, 13.5);
+            addTorch(10.5, 17.5);
+            addTorch(10.5, 21.5);
+            break;
+        case 6:
+            addTorch(3.5, 1.5);
+            addTorch(10.5, 3.5);
+            addTorch(18.5, 5.5);
+            addTorch(5.5, 9.5);
+            addTorch(15.5, 13.5);
+            addTorch(8.5, 17.5);
+            addTorch(10.5, 21.5);
+            break;
+        default:
+            addTorch(5.5, 7.5);
+            addTorch(15.5, 15.5);
+            addTorch(10.5, 21.5);
+            break;
+    }
+}
+
+/* Update torch animations and fire particles */
+void updateTorchSystem(void) {
+    int i;
+    clock_t now = clock();
+    long elapsed;
+
+    /* Update torch animations */
+    for (i = 0; i < numTorches; i++) {
+        if (!torches[i].active) continue;
+
+        elapsed = (now - torches[i].lastFlicker) * 1000 / CLOCKS_PER_SEC;
+
+        if (elapsed > TORCH_FLICKER_SPEED) {
+            /* Advance animation frame */
+            torches[i].animFrame = (torches[i].animFrame + 1) % 4;
+
+            /* Subtle intensity flicker (0.95 to 1.05) - minimal for stable walls */
+            torches[i].intensity = 0.95 + (rand() % 10) / 100.0;
+
+            torches[i].lastFlicker = now;
+        }
+    }
+
+    /* Update fire particles */
+    for (i = 0; i < MAX_FIRE_PARTICLES; i++) {
+        if (!fireParticles[i].active) continue;
+
+        /* Move particle */
+        fireParticles[i].x += fireParticles[i].vx;
+        fireParticles[i].y += fireParticles[i].vy;
+        fireParticles[i].z += fireParticles[i].vz;
+
+        /* Apply gravity and air resistance */
+        fireParticles[i].vz -= 0.001;  /* Slight gravity */
+        fireParticles[i].vx *= 0.98;   /* Air resistance */
+        fireParticles[i].vy *= 0.98;
+
+        /* Age particle */
+        fireParticles[i].life--;
+
+        /* Color fade: yellow -> orange -> red -> dark red */
+        if (fireParticles[i].life < 10) {
+            fireParticles[i].color = COLOR_RED;
+        } else if (fireParticles[i].life < 20) {
+            fireParticles[i].color = 4;  /* Dark red */
+        }
+
+        /* Kill dead particles */
+        if (fireParticles[i].life <= 0 || fireParticles[i].z < 0) {
+            fireParticles[i].active = 0;
+        }
+    }
+
+    /* Spawn new particles from torches */
+    elapsed = (now - lastParticleSpawn) * 1000 / CLOCKS_PER_SEC;
+    if (elapsed > 50) {  /* Every 50ms */
+        lastParticleSpawn = now;
+
+        /* Try to spawn a particle for each active torch */
+        for (i = 0; i < numTorches && i < 4; i++) {  /* Limit spawns per frame */
+            int j;
+            if (!torches[i].active) continue;
+            if (rand() % 3 != 0) continue;  /* 33% chance per torch */
+
+            /* Find inactive particle slot */
+            for (j = 0; j < MAX_FIRE_PARTICLES; j++) {
+                if (!fireParticles[j].active) {
+                    fireParticles[j].active = 1;
+                    fireParticles[j].x = torches[i].x + (rand() % 20 - 10) / 100.0;
+                    fireParticles[j].y = torches[i].y + (rand() % 20 - 10) / 100.0;
+                    fireParticles[j].z = 0.3;  /* Start above torch base */
+                    fireParticles[j].vx = (rand() % 10 - 5) / 500.0;
+                    fireParticles[j].vy = (rand() % 10 - 5) / 500.0;
+                    fireParticles[j].vz = 0.02 + (rand() % 20) / 1000.0;  /* Float upward */
+                    fireParticles[j].life = 30 + rand() % 20;
+                    fireParticles[j].color = COLOR_YELLOW;  /* Start yellow */
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/* Calculate torch light intensity at a world position */
+double getTorchLightAt(double worldX, double worldY) {
+    int i;
+    double totalLight = 0.0;
+
+    for (i = 0; i < numTorches; i++) {
+        if (!torches[i].active) continue;
+
+        double dx = worldX - torches[i].x;
+        double dy = worldY - torches[i].y;
+        double dist = sqrt(dx * dx + dy * dy);
+
+        if (dist < TORCH_LIGHT_RADIUS) {
+            /* Inverse square falloff with torch intensity */
+            double falloff = 1.0 - (dist / TORCH_LIGHT_RADIUS);
+            totalLight += falloff * falloff * torches[i].intensity;
+        }
+    }
+
+    /* Clamp to maximum */
+    if (totalLight > 1.5) totalLight = 1.5;
+    return totalLight;
+}
+
+/* Apply torch lighting to a color - STABLE version without flickering */
+/* Only affects very close walls with a consistent warm tint */
+unsigned char applyTorchLight(unsigned char baseColor, double lightLevel) {
+    /* Only apply effect for strong, close light (reduces flicker zones) */
+    if (lightLevel < 0.5) return baseColor;
+
+    /* Simple warm tint for walls very close to torches */
+    /* No multiple thresholds = no threshold-crossing flicker */
+    if (baseColor == COLOR_BLACK) return COLOR_BROWN;
+    if (baseColor == COLOR_BROWN) return 6;  /* Keep brown */
+
+    /* All other colors stay the same - stable walls */
+    return baseColor;
+}
 
 typedef struct {
     double x, y;
@@ -124,6 +500,19 @@ static int playerScore = 0;
 static clock_t muzzleFlashTime = 0;  /* Time when last shot was fired */
 static int shotsFired = 0;  /* Debug: track total shots */
 static int shotsHit = 0;  /* Debug: track hits */
+
+/* High Score System */
+#define MAX_HIGH_SCORES 10
+#define SCORE_FILE "SCORES.DAT"
+typedef struct {
+    char name[16];
+    int score;
+    int level;
+    char date[12];  /* MM/DD/YYYY format */
+} HighScore;
+
+static HighScore highScores[MAX_HIGH_SCORES];
+static int numHighScores = 0;
 
 /* Robot sprite - 25x32 from Kenney topdown shooter pack */
 static unsigned char robotSprite[800] = {
@@ -242,7 +631,7 @@ static unsigned char zombieSprite[800] = {
 };
 
 /* Simple 8x8 procedural textures */
-#define TEX_SIZE 8
+#define TEX_SIZE 64  /* Increased from 8 to 64 for finer detail */
 
 /* MAZE text pattern (5x5 pixels for each letter, simple font) */
 static const unsigned char mazeText[4][5] = {
@@ -351,7 +740,9 @@ int isTextPixel(int texX, int texY) {
     return 0;
 }
 
-/* Get wall texture - dark stone with fuzzy rock appearance */
+/* Get wall texture - HIGH DETAIL stone masonry (64x64 resolution) */
+/* Enemy colors to AVOID: Magenta(5), Red(4), Gray(8), White(15) */
+/* Wall colors: Browns(6), Yellows(14), Cyans(3,11), Blues(1,9), Greens(2,10) */
 unsigned char getWallTexel(int wallType, int texX, int texY, int level) {
     /* Add MAZE text decoration */
     if (isTextPixel(texX, texY)) {
@@ -415,161 +806,64 @@ unsigned char getWallTexel(int wallType, int texX, int texY, int level) {
         return darkColor;
     }
 
-    /* DETAILED STONE BLOCK TEXTURE with mortar lines and texture */
-    #define BLOCK_SIZE 16
-    #define MORTAR_WIDTH 2
+    /* CLASSIC STONE WALL - Wolfenstein 3D style clean look */
+    /* Colors: Cyan(3) as light gray, Brown(6) as medium, Black(0) as dark */
 
-    /* Calculate block position */
-    int blockX = texX / BLOCK_SIZE;
-    int blockY = texY / BLOCK_SIZE;
-    int localX = texX % BLOCK_SIZE;
-    int localY = texY % BLOCK_SIZE;
+    #define STONE_SIZE 16  /* 16x16 stone blocks */
 
-    /* Mortar lines between stone blocks - dark gray */
-    if (localX < MORTAR_WIDTH || localY < MORTAR_WIDTH) {
-        return COLOR_BLACK;
-    }
+    /* Calculate which stone block we're in */
+    int stoneX = texX / STONE_SIZE;
+    int stoneY = texY / STONE_SIZE;
+    int localX = texX % STONE_SIZE;
+    int localY = texY % STONE_SIZE;
 
-    /* Stone block interior with detailed texture */
-    int noise1 = (texX * 7 + texY * 13 + blockX * 17 + blockY * 23) % 16;
-    int noise2 = (texX * 11 + texY * 19) % 8;
-    int noise3 = ((texX + blockX * 5) * (texY + blockY * 3)) % 6;
-    int combinedNoise = (noise1 + noise2 + noise3) % 16;
-
-    /* Cracks and weathering pattern */
-    int cracksPattern = ((texX * 13 + texY * 7) ^ (blockX * 5 + blockY * 7)) % 32;
-    int weathering = ((localX + localY + blockX + blockY) * 7) % 8;
-
-    unsigned char baseColor, lightColor, darkColor, midColor, accentColor;
-
-    /* Stone block colors with variation per block */
-    int blockVariation = (blockX * 7 + blockY * 13) % 10;
-
-    if (blockVariation < 3) {
-        /* Dark gray stone */
-        baseColor = COLOR_GRAY;
-        midColor = COLOR_GRAY;
-        lightColor = COLOR_WHITE;
-        darkColor = COLOR_BLACK;
-        accentColor = COLOR_BROWN;
-    } else if (blockVariation < 6) {
-        /* Brownstone */
-        baseColor = COLOR_BROWN;
-        midColor = COLOR_BROWN;
-        lightColor = COLOR_GRAY;
-        darkColor = COLOR_BLACK;
-        accentColor = COLOR_RED;
-    } else {
-        /* Mixed gray-brown */
-        baseColor = COLOR_GRAY;
-        midColor = COLOR_BROWN;
-        lightColor = COLOR_WHITE;
-        darkColor = COLOR_BLACK;
-        accentColor = COLOR_GRAY;
-    }
-
-    /* Cracks in stone */
-    if (cracksPattern < 2) {
-        return COLOR_BLACK;
-    }
-
-    /* 3D bevel effect on edges */
-    if (localX == MORTAR_WIDTH || localY == MORTAR_WIDTH) {
-        return lightColor;  /* Bright edge - top/left highlight */
-    }
-    if (localX == BLOCK_SIZE - 1 || localY == BLOCK_SIZE - 1) {
-        return darkColor;  /* Dark edge - bottom/right shadow */
-    }
-
-    /* Apply detailed texture with weathering */
-    if (combinedNoise < 2) {
-        return darkColor;  /* Deep shadows in crevices */
-    } else if (combinedNoise < 4 && weathering < 3) {
-        return accentColor;  /* Accent color streaks */
-    } else if (combinedNoise < 6) {
-        return baseColor;  /* Base stone color */
-    } else if (combinedNoise < 12) {
-        return midColor;   /* Mid-tone variations */
-    } else if (combinedNoise < 14) {
-        return lightColor; /* Light spots and highlights */
-    } else {
-        return midColor;   /* More mid-tone fill */
-    }
-}
-
-/* Get floor texture - procedural brick pattern (restored) */
-unsigned char getFloorTexel(int texX, int texY, int level) {
-    /* Wrap coordinates */
-    texX = texX & (TEX_SIZE - 1);
-    texY = texY & (TEX_SIZE - 1);
-
-    /* REALISTIC bricks - 8x4 pixels for better brick appearance */
-    #define BRICK_WIDTH 8
-    #define BRICK_HEIGHT 4
-    #define GROUT_SIZE 1
-
-    /* Calculate which brick row we're in */
-    int brickRow = texY / BRICK_HEIGHT;
-
-    /* Offset every other row by half a brick width for proper brick pattern */
-    int offsetX = texX;
-    if (brickRow % 2 == 1) {
-        offsetX = (texX + BRICK_WIDTH / 2) & (TEX_SIZE - 1);
-    }
-
-    /* Calculate position within brick */
-    int localX = offsetX % BRICK_WIDTH;
-    int localY = texY % BRICK_HEIGHT;
-
-    /* Grout lines between bricks - dark grey grout */
+    /* Mortar between stones - 1 pixel black lines */
     if (localX == 0 || localY == 0) {
         return COLOR_BLACK;
     }
 
-    /* Determine brick color - realistic red/brown brick mix */
-    int brickX = offsetX / BRICK_WIDTH;
-    int brickY = texY / BRICK_HEIGHT;
-    int brickHash = (brickX * 7 + brickY * 13) % 10;
+    /* Simple stone texture with light variation */
+    int stoneSeed = (stoneX * 31 + stoneY * 47) % 8;
 
-    unsigned char brickColor;
-    if (level == 1) {
-        /* Level 1: Red brick mix with brown accents */
-        if (brickHash < 6) {
-            brickColor = COLOR_RED;      /* 60% red bricks */
-        } else if (brickHash < 9) {
-            brickColor = COLOR_BROWN;    /* 30% brown bricks */
-        } else {
-            brickColor = COLOR_LRED;     /* 10% light red bricks */
-        }
-    } else if (level == 2) {
-        /* Level 2: Grey stone brick mix */
-        if (brickHash < 5) {
-            brickColor = COLOR_GRAY;     /* 50% grey */
-        } else if (brickHash < 8) {
-            brickColor = COLOR_BROWN;    /* 30% brown */
-        } else {
-            brickColor = COLOR_WHITE;    /* 20% white/light grey */
-        }
+    /* 3-shade simple pattern for clean look */
+    unsigned char stoneColor;
+
+    if (stoneSeed < 3) {
+        stoneColor = COLOR_CYAN;   /* Light gray stone (most common) */
+    } else if (stoneSeed < 6) {
+        stoneColor = COLOR_BROWN;  /* Medium gray stone */
     } else {
-        /* Level 3: Dark stone mix */
-        if (brickHash < 5) {
-            brickColor = COLOR_GRAY;     /* 50% grey */
-        } else if (brickHash < 8) {
-            brickColor = COLOR_BLACK;    /* 30% black */
-        } else {
-            brickColor = COLOR_BLUE;     /* 20% blue-grey */
-        }
+        stoneColor = COLOR_BLUE;   /* Darker gray stone */
     }
 
-    /* Add slight darkening to edges for 3D effect */
-    if (localX == 1 || localY == 1 || localX == BRICK_WIDTH - 1 || localY == BRICK_HEIGHT - 1) {
-        /* Darken edge pixels slightly for depth */
-        if (brickColor == COLOR_RED) return COLOR_BROWN;
-        if (brickColor == COLOR_BROWN) return COLOR_BLACK;
-        if (brickColor == COLOR_GRAY) return COLOR_BLACK;
+    /* Add simple depth - lighten top-left, darken bottom-right */
+    if (localX < 3 && localY < 3) {
+        /* Top-left corner - brighten */
+        if (stoneColor == COLOR_BROWN) return COLOR_CYAN;
+        if (stoneColor == COLOR_BLUE) return COLOR_BROWN;
+    } else if (localX > 12 || localY > 12) {
+        /* Bottom-right edge - darken */
+        if (stoneColor == COLOR_CYAN) return COLOR_BROWN;
+        if (stoneColor == COLOR_BROWN) return COLOR_BLUE;
     }
 
-    return brickColor;
+    return stoneColor;
+}
+
+/* Get floor texture - LOCKED TO WORLD GRID to prevent treadmill effect */
+/* Simple dark floor that stays put */
+unsigned char getFloorTexel(int worldX, int worldY) {
+    /* worldX and worldY are INTEGER maze cell coordinates */
+    /* This locks the pattern to the maze grid - no sliding! */
+
+    /* Simple checkerboard locked to maze cells */
+    int checker = (worldX + worldY) & 1;
+
+    if (checker) {
+        return COLOR_GREEN;   /* Dark green (appears as dark floor) */
+    } else {
+        return COLOR_LGREEN;  /* Lighter green */
+    }
 }
 
 /*============================================================================
@@ -743,15 +1037,8 @@ void renderFrame(Player *player, Maze *maze) {
     int x, y;
     int level = maze->level;
 
-    /* Draw ceiling - level-specific colors with starry sky */
-    unsigned char ceilingColor;
-    if (level == 1) {
-        ceilingColor = COLOR_BLUE;      /* Level 1: Standard deep blue */
-    } else if (level == 2) {
-        ceilingColor = COLOR_BLACK;     /* Level 2: Darker void */
-    } else {
-        ceilingColor = COLOR_BLACK;     /* Level 3: Complete darkness */
-    }
+    /* Draw ceiling - BLACK for all levels (no blue!) */
+    unsigned char ceilingColor = COLOR_BLACK;
 
     /* Shift horizon with pitch for cohesive vertical look (Doom-style) */
     int horizon = SCREEN_CENTER + playerPitch;
@@ -797,10 +1084,11 @@ void renderFrame(Player *player, Maze *maze) {
         double floorY = player->y + rowDistance * player->dirY - rowDistance * player->planeY;
 
         for (x = 0; x < SCREEN_WIDTH; x++) {
-            /* Get texture coordinates from world position */
-            int texX = (int)(floorX * TEX_SIZE) & (TEX_SIZE - 1);
-            int texY = (int)(floorY * TEX_SIZE) & (TEX_SIZE - 1);
-            backBuffer[y * SCREEN_WIDTH + x] = getFloorTexel(texX, texY, level);
+            /* Use INTEGER world coordinates to lock floor to maze grid */
+            /* This prevents the treadmill/sliding effect */
+            int worldX = (int)floorX;
+            int worldY = (int)floorY;
+            backBuffer[y * SCREEN_WIDTH + x] = getFloorTexel(worldX, worldY);
 
             floorX += floorStepX;
             floorY += floorStepY;
@@ -879,7 +1167,8 @@ void renderFrame(Player *player, Maze *maze) {
         zBuffer[x] = perpWallDist;
 
         /* Calculate height of line to draw on screen */
-        int lineHeight = (int)(SCREEN_HEIGHT / perpWallDist);
+        /* TALLER WALLS SYSTEM - 1.5x height for more imposing walls */
+        int lineHeight = (int)(SCREEN_HEIGHT * 1.5 / perpWallDist);
 
         /* Calculate wall position WITHOUT pitch (for texture mapping) */
         int wallStart = -lineHeight / 2 + SCREEN_CENTER;
@@ -912,6 +1201,19 @@ void renderFrame(Player *player, Maze *maze) {
         int wallDrawStart = wallStart + playerPitch;  /* Where wall should start with pitch */
         double texPos = (drawStart - wallDrawStart) * step;  /* Offset for clipped top */
 
+        /* Calculate wall world position for torch lighting */
+        double wallWorldX, wallWorldY;
+        if (side == 0) {
+            wallWorldX = mapX + 0.5;
+            wallWorldY = player->y + perpWallDist * rayDirY;
+        } else {
+            wallWorldX = player->x + perpWallDist * rayDirX;
+            wallWorldY = mapY + 0.5;
+        }
+
+        /* Get torch light level at this wall position */
+        double torchLight = getTorchLightAt(wallWorldX, wallWorldY);
+
         /* Draw textured vertical line */
         for (y = drawStart; y < drawEnd; y++) {
             int texY = ((int)texPos) & (TEX_SIZE - 1);
@@ -920,21 +1222,23 @@ void renderFrame(Player *player, Maze *maze) {
             /* Sample texture with level-specific colors */
             unsigned char color = getWallTexel(cellValue, texX, texY, level);
 
-            /* Apply distance fog - preserve bright colors better */
+            /* Apply distance fog - simple darkening */
             if (perpWallDist > 15.0) {
-                color = VOID_BLACK;
+                color = COLOR_BLACK;  /* Far walls are black */
             } else if (perpWallDist > 10.0) {
-                /* Heavy fog - darken but preserve some color */
-                if (color >= 8) color -= 6; /* Bright to dim */
-                else if (color > 0) color = color / 2; /* Dim to darker */
-            } else if (perpWallDist > 5.0) {
-                /* Light fog - darken bright colors only */
-                if (color > 8) color -= 4;
+                /* Darken distant walls slightly */
+                if (color == COLOR_WHITE) color = COLOR_BROWN;
             }
 
-            /* Make EW walls darker for depth perception - only if not too dark */
-            if (side == 1 && color > 2) {
-                color = color - 1;
+            /* Make EW walls slightly darker for depth */
+            if (side == 1) {
+                if (color == COLOR_WHITE) color = COLOR_BROWN;
+                else if (color == COLOR_BROWN) color = COLOR_BLACK;
+            }
+
+            /* v3.0: Apply dynamic torch lighting */
+            if (torchLight > 0.1 && perpWallDist < 12.0) {
+                color = applyTorchLight(color, torchLight);
             }
 
             backBuffer[y * SCREEN_WIDTH + x] = color;
@@ -1184,8 +1488,153 @@ void renderSprites(Player *player) {
 }
 
 /*============================================================================
+ * TORCH AND FIRE PARTICLE RENDERING - v3.0 FEATURE
+ *===========================================================================*/
+
+/* Render animated torches as billboard sprites */
+void renderTorches(Player *player) {
+    int i, x, y;
+
+    for (i = 0; i < numTorches; i++) {
+        if (!torches[i].active) continue;
+
+        /* Get current animation frame */
+        unsigned char *spriteData = torchFrames[torches[i].animFrame];
+
+        /* Translate torch position to relative to camera */
+        double spriteX = torches[i].x - player->x;
+        double spriteY = torches[i].y - player->y;
+
+        /* Transform sprite with inverse camera matrix */
+        double invDet = 1.0 / (player->planeX * player->dirY - player->dirX * player->planeY);
+        double transformX = invDet * (player->dirY * spriteX - player->dirX * spriteY);
+        double transformY = invDet * (-player->planeY * spriteX + player->planeX * spriteY);
+
+        /* Torch is behind player - don't render */
+        if (transformY <= 0.2) continue;
+
+        /* Calculate torch screen X position */
+        int torchScreenX = (int)((SCREEN_WIDTH / 2) * (1 + transformX / transformY));
+
+        /* Calculate torch height on screen (slightly smaller than enemies) */
+        int torchHeight = abs((int)(SCREEN_HEIGHT * 0.6 / transformY));
+
+        /* Calculate torch width maintaining aspect ratio (16:24) */
+        int torchWidth = abs((int)(torchHeight * TORCH_WIDTH / TORCH_HEIGHT));
+
+        /* Calculate draw positions with pitch offset */
+        int drawStartY = -torchHeight / 2 + SCREEN_CENTER + playerPitch + torchHeight / 4;  /* Shifted down to floor */
+        int drawEndY = torchHeight / 2 + SCREEN_CENTER + playerPitch + torchHeight / 4;
+        if (drawStartY < 0) drawStartY = 0;
+        if (drawEndY >= SCREEN_HEIGHT) drawEndY = SCREEN_HEIGHT - 1;
+        int drawStartX = -torchWidth / 2 + torchScreenX;
+        int drawEndX = torchWidth / 2 + torchScreenX;
+        if (drawStartX < 0) drawStartX = 0;
+        if (drawEndX >= SCREEN_WIDTH) drawEndX = SCREEN_WIDTH - 1;
+
+        /* Render torch column by column */
+        for (x = drawStartX; x < drawEndX; x++) {
+            /* Check if torch is in front of wall */
+            if (transformY < zBuffer[x]) {
+                /* Calculate texture X coordinate */
+                int texX = (int)((x - (-torchWidth / 2 + torchScreenX)) * TORCH_WIDTH / torchWidth);
+                if (texX < 0 || texX >= TORCH_WIDTH) continue;
+
+                /* Render torch column */
+                for (y = drawStartY; y < drawEndY; y++) {
+                    int texY = (int)((y - drawStartY) * TORCH_HEIGHT / (drawEndY - drawStartY));
+                    if (texY < 0 || texY >= TORCH_HEIGHT) continue;
+
+                    /* Get torch pixel color */
+                    unsigned char color = spriteData[texY * TORCH_WIDTH + texX];
+
+                    /* Draw pixel if not transparent */
+                    if (color != 0) {
+                        backBuffer[y * SCREEN_WIDTH + x] = color;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Render fire particles floating above torches */
+void renderFireParticles(Player *player) {
+    int i;
+
+    for (i = 0; i < MAX_FIRE_PARTICLES; i++) {
+        if (!fireParticles[i].active) continue;
+
+        /* Translate particle position to camera space */
+        double particleX = fireParticles[i].x - player->x;
+        double particleY = fireParticles[i].y - player->y;
+
+        /* Transform with inverse camera matrix */
+        double invDet = 1.0 / (player->planeX * player->dirY - player->dirX * player->planeY);
+        double transformX = invDet * (player->dirY * particleX - player->dirX * particleY);
+        double transformY = invDet * (-player->planeY * particleX + player->planeX * particleY);
+
+        /* Particle is behind player */
+        if (transformY <= 0.1) continue;
+
+        /* Calculate screen position */
+        int screenX = (int)((SCREEN_WIDTH / 2) * (1 + transformX / transformY));
+
+        /* Y position based on particle height (z) and perspective */
+        int baseY = SCREEN_CENTER + playerPitch;
+        int screenY = baseY - (int)(fireParticles[i].z * SCREEN_HEIGHT / transformY);
+
+        /* Clamp to screen bounds */
+        if (screenX < 0 || screenX >= SCREEN_WIDTH) continue;
+        if (screenY < 0 || screenY >= SCREEN_HEIGHT) continue;
+
+        /* Only draw if in front of wall */
+        if (transformY < zBuffer[screenX]) {
+            /* Draw particle as 1-2 pixels depending on distance */
+            backBuffer[screenY * SCREEN_WIDTH + screenX] = fireParticles[i].color;
+
+            /* Add extra pixels for close particles */
+            if (transformY < 3.0) {
+                if (screenX + 1 < SCREEN_WIDTH) {
+                    backBuffer[screenY * SCREEN_WIDTH + screenX + 1] = fireParticles[i].color;
+                }
+                if (screenY + 1 < SCREEN_HEIGHT) {
+                    backBuffer[(screenY + 1) * SCREEN_WIDTH + screenX] = fireParticles[i].color;
+                }
+            }
+        }
+    }
+}
+
+/*============================================================================
  * SHOOTING MECHANICS
  *===========================================================================*/
+
+/* Check if there's a clear line of sight between two points (no walls blocking) */
+int hasLineOfSight(Player *player, Maze *maze, double targetX, double targetY) {
+    double dirX = targetX - player->x;
+    double dirY = targetY - player->y;
+    double distance = sqrt(dirX * dirX + dirY * dirY);
+    double stepX = dirX / distance * 0.05;  /* Small steps for accurate collision */
+    double stepY = dirY / distance * 0.05;
+    double rayX = player->x;
+    double rayY = player->y;
+    int steps = (int)(distance / 0.05);
+    int i;
+
+    /* Step along ray from player to target */
+    for (i = 0; i < steps; i++) {
+        rayX += stepX;
+        rayY += stepY;
+
+        /* Check if we hit a wall */
+        if (isWall(getMazeCell(maze, (int)rayX, (int)rayY))) {
+            return 0;  /* Wall blocks line of sight */
+        }
+    }
+
+    return 1;  /* Clear line of sight */
+}
 
 /* Shoot weapon - returns 0=no ammo, 1=shot fired but miss, 2=hit, 3=kill */
 int shootWeapon(Player *player, Maze *maze) {
@@ -1235,10 +1684,13 @@ int shootWeapon(Player *player, Maze *maze) {
         while (angleDiff > 3.14159265) angleDiff -= 6.28318530;
         while (angleDiff < -3.14159265) angleDiff += 6.28318530;
 
-        /* Check if sprite is in front (within 15 degree cone) */
+        /* Check if sprite is in front (within 15 degree cone) AND has clear line of sight */
         if (fabs(angleDiff) < 0.26 && dist < closestDist && dist < 20.0) {
-            closestDist = dist;
-            closestSprite = i;
+            /* NEW: Check if walls block the shot */
+            if (hasLineOfSight(player, maze, testSprites[i].x, testSprites[i].y)) {
+                closestDist = dist;
+                closestSprite = i;
+            }
         }
     }
 
@@ -1921,13 +2373,10 @@ void showVGASplashScreen(void) {
         frame++;
     }
 
-    /* Hold on title for 5 seconds */
-    delay(5000);
-
-    /* Fade in credits using color progression */
+    /* Fade in credits immediately after title animation */
     const char *credit1 = "CREATED BY TRENT VON HOLTEN";
     const char *credit2 = "VONHOLTENCODES";
-    const char *credit3 = "VERSION 2.20 - 2025";
+    const char *credit3 = "VERSION 3.0 - 2025";
 
     int credit1X = (SCREEN_WIDTH - strlen(credit1) * 8) / 2;
     int credit2X = (SCREEN_WIDTH - strlen(credit2) * 8) / 2;
@@ -1953,8 +2402,10 @@ void showVGASplashScreen(void) {
         delay(300);  /* Slower fade - 300ms per step */
     }
 
+    /* Hold on title and credits for 5 seconds */
+    delay(5000);
+
     /* Now show instructions */
-    delay(1000);  /* Hold credits longer before showing instructions */
     clearScreen(COLOR_BLACK);
 
     /* Title at top */
@@ -1985,7 +2436,7 @@ void showVGASplashScreen(void) {
     y += 10;
     drawText(25, y, "FIND FLASHING EXIT ON MINIMAP", COLOR_YELLOW);
     y += 10;
-    drawText(25, y, "SURVIVE 3 LEVELS TO WIN!", COLOR_LRED);
+    drawText(25, y, "SURVIVE 6 LEVELS TO WIN!", COLOR_LRED);
 
     /* Credits at bottom */
     drawText(credit1X, 172, credit1, COLOR_WHITE);
@@ -2053,7 +2504,7 @@ void showLevelSplash(int level) {
 
     /* Level number */
     char numText[32];
-    sprintf(numText, "LEVEL %d OF 3", level);
+    sprintf(numText, "LEVEL %d OF 6", level);
     int numX = (SCREEN_WIDTH - strlen(numText) * 8) / 2;
     drawText(numX, 120, numText, NEON_MAGENTA);
 
@@ -2094,9 +2545,9 @@ void playFootstepSound(void) {
     if (elapsed >= FOOTSTEP_DELAY_MS) {
         int freq = footstepTones[footstepIndex];
 
-        /* Quick short tone for footstep */
+        /* Quick short tone for footstep - VERY QUIET */
         if (isAudioAvailable()) {
-            playToneBlocking(freq, 50);  /* Short 50ms burst */
+            playToneBlocking(freq, 8);  /* Ultra short 8ms burst (was 20ms) */
         } else {
             /* PC Speaker fallback */
             unsigned int divisor = 1193180 / freq;
@@ -2105,7 +2556,7 @@ void playFootstepSound(void) {
             outp(0x42, divisor >> 8);
             unsigned char tmp = inp(0x61);
             outp(0x61, tmp | 3);
-            delay(50);
+            delay(8);  /* Ultra short footstep (was 20ms) */
             outp(0x61, tmp & 0xFC);
         }
 
@@ -2180,6 +2631,236 @@ void playVictorySound(void) {
 }
 
 /* Show credits screen - skippable with ESC */
+/*===========================================================================
+ * HIGH SCORE SYSTEM
+ *===========================================================================*/
+
+/* Load high scores from file */
+void loadHighScores(void) {
+    FILE *fp = fopen(SCORE_FILE, "rb");
+    int i;
+
+    /* Initialize with zeros */
+    numHighScores = 0;
+    for (i = 0; i < MAX_HIGH_SCORES; i++) {
+        strcpy(highScores[i].name, "");
+        highScores[i].score = 0;
+        highScores[i].level = 0;
+        strcpy(highScores[i].date, "");
+    }
+
+    if (fp == NULL) {
+        /* No score file exists yet - that's OK */
+        return;
+    }
+
+    /* Read scores from file */
+    numHighScores = fread(highScores, sizeof(HighScore), MAX_HIGH_SCORES, fp);
+    fclose(fp);
+}
+
+/* Save high scores to file */
+void saveHighScores(void) {
+    FILE *fp = fopen(SCORE_FILE, "wb");
+    if (fp == NULL) {
+        return;  /* Can't save - oh well */
+    }
+
+    fwrite(highScores, sizeof(HighScore), numHighScores, fp);
+    fclose(fp);
+}
+
+/* Check if score qualifies for high score table */
+int isHighScore(int score) {
+    if (numHighScores < MAX_HIGH_SCORES) {
+        return 1;  /* Table not full yet */
+    }
+    return (score > highScores[numHighScores - 1].score);
+}
+
+/* Get player name input (in VGA mode) */
+void getPlayerName(char *name, int maxLen) {
+    int i = 0;
+    int ch;
+    int needsRedraw = 1;
+
+    /* Clear name buffer */
+    memset(name, 0, maxLen);
+
+    /* Clear keyboard buffer first */
+    while (kbhit()) getch();
+
+    clearScreen(COLOR_BLACK);
+    drawBigText(70, 60, "ENTER NAME:", COLOR_YELLOW);
+    drawText(60, 100, "(UP TO 15 CHARACTERS)", COLOR_GRAY);
+    drawText(60, 115, "PRESS ENTER WHEN DONE", COLOR_GRAY);
+    displayFrame();
+
+    while (1) {
+        /* Only redraw if something changed */
+        if (needsRedraw) {
+            char displayName[20];
+            sprintf(displayName, "%s_", name);  /* Show cursor */
+            int nameX = (SCREEN_WIDTH - strlen(displayName) * 8) / 2;
+
+            /* Clear line and redraw */
+            drawText(0, 140, "                                        ", COLOR_BLACK);
+            drawText(nameX, 140, displayName, COLOR_LGREEN);
+            displayFrame();
+            needsRedraw = 0;
+        }
+
+        /* Wait for key */
+        if (!kbhit()) continue;
+
+        ch = getch();
+
+        /* Handle extended keys (arrows, delete, etc.) */
+        if (ch == 0) {
+            getch();  /* Consume the extended scancode and ignore */
+            continue;
+        }
+
+        if (ch == 13 || ch == 10) {  /* Enter */
+            break;
+        } else if (ch == 8) {  /* Backspace ONLY */
+            if (i > 0) {
+                i--;
+                name[i] = '\0';
+                needsRedraw = 1;
+            }
+        } else if (ch >= 'A' && ch <= 'Z') {  /* Uppercase letters */
+            if (i < maxLen - 1) {
+                name[i] = ch;
+                i++;
+                name[i] = '\0';
+                needsRedraw = 1;
+            }
+        } else if (ch >= 'a' && ch <= 'z') {  /* Convert lowercase to uppercase */
+            if (i < maxLen - 1) {
+                name[i] = ch - 32;  /* Convert to uppercase */
+                i++;
+                name[i] = '\0';
+                needsRedraw = 1;
+            }
+        } else if (ch >= '0' && ch <= '9') {  /* Numbers */
+            if (i < maxLen - 1) {
+                name[i] = ch;
+                i++;
+                name[i] = '\0';
+                needsRedraw = 1;
+            }
+        } else if (ch == ' ') {  /* Space */
+            if (i < maxLen - 1 && i > 0) {  /* No leading spaces */
+                name[i] = ch;
+                i++;
+                name[i] = '\0';
+                needsRedraw = 1;
+            }
+        }
+        /* Ignore all other keys (arrows, delete, etc.) */
+    }
+
+    /* If no name entered, use default */
+    if (strlen(name) == 0) {
+        strcpy(name, "PLAYER");
+    }
+}
+
+/* Add new high score to table */
+void addHighScore(int score, int level, const char *playerName) {
+    int i, insertPos;
+    time_t t;
+    struct tm *tm_info;
+    char dateStr[12];
+
+    /* Get current date */
+    time(&t);
+    tm_info = localtime(&t);
+    sprintf(dateStr, "%02d/%02d/%04d",
+            tm_info->tm_mon + 1,
+            tm_info->tm_mday,
+            tm_info->tm_year + 1900);
+
+    /* Find insertion position */
+    insertPos = numHighScores;
+    for (i = 0; i < numHighScores; i++) {
+        if (score > highScores[i].score) {
+            insertPos = i;
+            break;
+        }
+    }
+
+    /* Shift scores down */
+    for (i = MAX_HIGH_SCORES - 1; i > insertPos; i--) {
+        highScores[i] = highScores[i - 1];
+    }
+
+    /* Insert new score */
+    strncpy(highScores[insertPos].name, playerName, 15);
+    highScores[insertPos].name[15] = '\0';
+    highScores[insertPos].score = score;
+    highScores[insertPos].level = level;
+    strcpy(highScores[insertPos].date, dateStr);
+
+    if (numHighScores < MAX_HIGH_SCORES) {
+        numHighScores++;
+    }
+
+    /* Save to file */
+    saveHighScores();
+}
+
+/* Display high score table */
+void showHighScores(void) {
+    int i;
+    char buffer[80];
+
+    clearScreen(COLOR_BLACK);
+
+    /* Title */
+    drawBigText(80, 10, "HIGH SCORES", COLOR_YELLOW);
+
+    /* Column headers */
+    drawText(20, 35, "RANK  NAME            SCORE   LEVEL   DATE", COLOR_LCYAN);
+    drawText(20, 45, "----  --------------  ------  -----   ----------", COLOR_GRAY);
+
+    /* Display scores */
+    for (i = 0; i < numHighScores && i < MAX_HIGH_SCORES; i++) {
+        int y = 55 + (i * 12);
+
+        /* Rank */
+        sprintf(buffer, "%2d.", i + 1);
+        drawText(20, y, buffer, COLOR_WHITE);
+
+        /* Name */
+        sprintf(buffer, "%-14s", highScores[i].name);
+        drawText(50, y, buffer, COLOR_LGREEN);
+
+        /* Score */
+        sprintf(buffer, "%6d", highScores[i].score);
+        drawText(120, y, buffer, COLOR_YELLOW);
+
+        /* Level */
+        sprintf(buffer, "%3d", highScores[i].level);
+        drawText(160, y, buffer, COLOR_LMAGENTA);
+
+        /* Date */
+        drawText(195, y, highScores[i].date, COLOR_GRAY);
+    }
+
+    if (numHighScores == 0) {
+        drawText(80, 90, "NO HIGH SCORES YET", COLOR_GRAY);
+        drawText(60, 105, "BE THE FIRST TO SET A RECORD!", COLOR_LGREEN);
+    }
+
+    /* Instructions */
+    drawText(70, 180, "PRESS ANY KEY TO CONTINUE", COLOR_WHITE);
+
+    displayFrame();
+    getch();
+}
+
 void showCredits(void) {
     clearScreen(COLOR_BLACK);
 
@@ -2190,7 +2871,7 @@ void showCredits(void) {
 
     /* Credits - ALL UPPERCASE FOR VISIBILITY */
     drawText(20, 45, "CREATED BY VONHOLTENCODES (2025)", COLOR_YELLOW);
-    drawText(20, 55, "VERSION 2.19", COLOR_LCYAN);
+    drawText(20, 55, "VERSION 3.0", COLOR_LCYAN);
     drawText(20, 70, "OPEN SOURCE & FREEWARE USED:", COLOR_WHITE);
 
     drawText(20, 85, "- MINION GAME SPRITES (VONHOLTENCODES)", COLOR_GRAY);
@@ -2274,7 +2955,7 @@ void showSplashScreen(void) {
     printf("  ##     ##  ##     ##  #######  #######\n");
     printf("\n");
     printf("        CYBERPUNK 3D RAYCASTING GAME\n");
-    printf("              3 Levels of Terror\n");
+    printf("              6 Levels of Terror\n");
     printf("\n");
     printf("   ========================================\n");
     printf("        Created by Trent Von Holten\n");
@@ -2310,7 +2991,7 @@ int main(void) {
 
     /* Now show system verification messages */
     printf("\n");
-    printf("MAZE RUNNER v2.20 - DOS Raycasting Engine\n");
+    printf("MAZE RUNNER v3.0 - DOS Raycasting Engine - Dynamic Lighting\n");
     printf("(c) 2025 Trent Von Holten - VonHoltenCodes\n");
     printf("\n");
     printf("Checking system requirements...\n");
@@ -2332,8 +3013,14 @@ int main(void) {
     /* Initialize game systems */
     printf("[ SYSTEM ] Initializing neural uplink...\n");
 
+    /* Load high scores */
+    loadHighScores();
+
     /* Initialize audio */
     initAudio();
+
+    /* Initialize AdLib music */
+    initAdLib();
 
     /* Initialize mouse */
     initMouse();
@@ -2381,6 +3068,9 @@ int main(void) {
 
     /* Show level 1 splash */
     showLevelSplash(currentLevel);
+
+    /* v3.0: Initialize dynamic torch lighting system */
+    setupLevelTorches(currentLevel);
 
     /* Start game timer */
     gameStartTime = clock();
@@ -2593,10 +3283,19 @@ int main(void) {
         }
     }
 
-    /* Main game loop - handles all 3 levels */
+    /* Start music for first level */
+    playMusic(MUSIC_TRACK_LEVEL1);
+
+    /* Main game loop - handles all 6 levels */
     while (running) {
         /* Level game loop */
         while (running && !gameWon) {
+            /* Update music sequencer */
+            updateMusic();
+
+            /* v3.0: Update dynamic torch lighting and fire particles */
+            updateTorchSystem();
+
             /* Update enemy AI - make them move toward player */
             updateEnemyAI(&player, &maze);
 
@@ -2632,6 +3331,12 @@ int main(void) {
                     currentLevel = 1;
                     loadLevel(&maze, currentLevel);
 
+                    /* v3.0: Reset torch lighting for level 1 */
+                    setupLevelTorches(currentLevel);
+
+                    /* Start level music */
+                    playMusic(MUSIC_TRACK_LEVEL1);
+
                     /* Reset player position to spawn */
                     player.x = 1.5;
                     player.y = 1.5;
@@ -2665,6 +3370,27 @@ int main(void) {
                     /* Continue game loop */
                     continue;
                 } else {
+                    /* Check for high score */
+                    if (isHighScore(playerScore)) {
+                        char playerName[16];
+
+                        clearScreen(COLOR_BLACK);
+                        drawBigText(60, 60, "NEW HIGH SCORE!", COLOR_YELLOW);
+                        char scoreMsg[40];
+                        sprintf(scoreMsg, "SCORE: %d  LEVEL: %d", playerScore, currentLevel);
+                        int msgX = (SCREEN_WIDTH - strlen(scoreMsg) * 8) / 2;
+                        drawText(msgX, 95, scoreMsg, COLOR_LGREEN);
+                        drawText(50, 120, "PRESS ANY KEY TO CONTINUE", COLOR_WHITE);
+                        displayFrame();
+                        getch();
+
+                        /* Get player name */
+                        getPlayerName(playerName, 16);
+
+                        addHighScore(playerScore, currentLevel, playerName);
+                        showHighScores();
+                    }
+
                     /* Show credits before exit */
                     showCredits();
 
@@ -2676,6 +3402,12 @@ int main(void) {
 
             /* Render to back buffer */
             renderFrame(&player, &maze);
+
+            /* v3.0: Render animated torches with dynamic lighting */
+            renderTorches(&player);
+
+            /* v3.0: Render fire particles floating above torches */
+            renderFireParticles(&player);
 
             /* Render sprites on top of walls */
             renderSprites(&player);
@@ -2740,7 +3472,7 @@ int main(void) {
             showLevelCompletionSplash(currentLevel, elapsedTime);
 
             /* Check if there are more levels */
-            if (currentLevel < 3) {
+            if (currentLevel < 6) {
                 /* Ask to continue in VGA */
                 clearScreen(COLOR_BLACK);
                 const char *prompt = "CONTINUE TO NEXT LEVEL?";
@@ -2769,6 +3501,14 @@ int main(void) {
                     loadLevel(&maze, currentLevel);
                     initPlayer(&player, &maze);
 
+                    /* v3.0: Setup torches for new level */
+                    setupLevelTorches(currentLevel);
+
+                    /* Start appropriate level music */
+                    if (currentLevel <= 6) {
+                        playMusic(currentLevel);  /* MUSIC_TRACK_LEVEL1-6 map to levels 1-6 */
+                    }
+
                     /* Refill ammo to starting amount */
                     playerAmmo = STARTING_AMMO;
 
@@ -2794,6 +3534,27 @@ int main(void) {
         }
     }
 
+    /* Check for high score before exiting */
+    if (playerScore > 0 && isHighScore(playerScore)) {
+        char playerName[16];
+
+        clearScreen(COLOR_BLACK);
+        drawBigText(60, 60, "NEW HIGH SCORE!", COLOR_YELLOW);
+        char scoreMsg[40];
+        sprintf(scoreMsg, "SCORE: %d  LEVEL: %d", playerScore, currentLevel);
+        int msgX = (SCREEN_WIDTH - strlen(scoreMsg) * 8) / 2;
+        drawText(msgX, 95, scoreMsg, COLOR_LGREEN);
+        drawText(50, 120, "PRESS ANY KEY TO CONTINUE", COLOR_WHITE);
+        displayFrame();
+        getch();
+
+        /* Get player name */
+        getPlayerName(playerName, 16);
+
+        addHighScore(playerScore, currentLevel, playerName);
+        showHighScores();
+    }
+
     /* Show credits before exiting VGA mode */
     showCredits();
 
@@ -2804,8 +3565,8 @@ int main(void) {
     freeDoubleBuffer();
 
     printf("\n");
-    if (gameWon && currentLevel == 3) {
-        /* Final victory - all 3 levels completed */
+    if (gameWon && currentLevel == 6) {
+        /* Final victory - all 6 levels completed */
         printf("========================================\n");
         printf("  >>> ALL MAZES COMPLETED! <<<\n");
         printf("========================================\n");
@@ -2818,7 +3579,7 @@ int main(void) {
         /* Partial completion */
         printf("========================================\n");
         printf("  >> CONNECTION TERMINATED <<\n");
-        printf("  Completed %d of 3 levels\n", currentLevel);
+        printf("  Completed %d of 6 levels\n", currentLevel);
         printf("  Thank you for running the grid\n");
         printf("\n");
     } else {
@@ -2850,12 +3611,13 @@ int main(void) {
     }
 
     printf("  VonHoltenCodes 2025\n");
-    printf("  MAZE RUNNER v2.19\n");
+    printf("  MAZE RUNNER v3.0 - Dynamic Lighting Edition\n");
     printf("========================================\n");
     printf("\n");
 
     /* Cleanup */
     shutdownAudio();
+    shutdownAdLib();
 
 #ifdef __DJGPP__
     __djgpp_nearptr_disable();
